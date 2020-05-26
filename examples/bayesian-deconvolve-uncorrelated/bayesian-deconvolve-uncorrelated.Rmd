@@ -33,13 +33,13 @@ ggplot(sim_df, aes(x = t, y = x)) +
 
 ```{r}
 delay_dist <- {
-  t <- seq(1, 40)
-  p_unnorm <- pgamma(t, shape = 2.5, rate = 0.25) - pgamma(t - 1, shape = 2.5, rate = 0.25)
+  t <- seq(0, 39)
+  p_unnorm <- pgamma(t + 1, shape = 2.5, rate = 0.25) - pgamma(t, shape = 2.5, rate = 0.25)
   
-  data.frame(t = t, p = p_unnorm / sum(p_unnorm))
+  data.frame(t = t, pmf = p_unnorm / sum(p_unnorm))
 }
 
-ggplot(delay_dist, aes(x = t, y = p)) +
+ggplot(delay_dist, aes(x = t, y = pmf)) +
   geom_col()
   
 ```
@@ -48,9 +48,9 @@ ggplot(delay_dist, aes(x = t, y = p)) +
 
 ```{r}
 obs_df <- {
-  y <- convolve_delay(sim_df$x, delay_dist$p)
+  y <- convolve_delay(sim_df$x, delay_dist$pmf)
   t_start <- sim_df$t[1]
-  t_end <- sim_df$t[nrow(sim_df)] + nrow(delay_dist)
+  t_end <- sim_df$t[nrow(sim_df)] + nrow(delay_dist) - 1
   data.frame(t = t_start:t_end, y = round(y))
 }
 
@@ -66,14 +66,14 @@ model <- stan_model('../../stan/deconvolve-uncorrelated.stan')
 
 ```{r}
 model_input_data <- list(
-  dt_min = min(delay_dist$t),
-  np = length(delay_dist$p),
-  p = delay_dist$p,
-  ty_min = obs_df$t[1],
-  ny = nrow(obs_df),
-  y = obs_df$y,
-  tx_min = sim_df$t[1],
-  nx = nrow(sim_df)
+  delay_min = min(delay_dist$t),
+  n_delay = length(delay_dist$pmf),
+  pmf_delay = delay_dist$pmf,
+  t_obs_min = obs_df$t[1],
+  n_obs = nrow(obs_df),
+  y_obs = obs_df$y,
+  t_unobs_min = sim_df$t[1],
+  n_unobs = nrow(sim_df)
 )
 ```
 
@@ -89,9 +89,9 @@ params <- rstan::extract(fit)
 ```{r}
 result_df <- sim_df %>%
   mutate(
-    xhat_mean = colMeans(params$lambda_x),
-    xhat_025 = apply(params$lambda_x, 2, function(x) quantile(x, 0.025)),
-    xhat_975 = apply(params$lambda_x, 2, function(x) quantile(x, 0.975))
+    xhat_mean = colMeans(params$x_unobs),
+    xhat_025 = apply(params$x_unobs, 2, function(x) quantile(x, 0.025)),
+    xhat_975 = apply(params$x_unobs, 2, function(x) quantile(x, 0.975))
   )
 
 ggplot(result_df) +

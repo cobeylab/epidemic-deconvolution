@@ -1,61 +1,66 @@
 data {
   // Smallest (most negative) delay
-  int dt_min;
+  int delay_min;
   
   // Length of delay distribution
-  int np;
+  int n_delay;
   
   // PMF of delay distribution
-  simplex[np] p;
+  simplex[n_delay] pmf_delay;
   
   // Initial time of observed time series
-  int ty_min;
+  int t_obs_min;
   
   // Length of observed, delayed time series
-  int ny;
+  int n_obs;
   
   // Delayed observations
-  int<lower=0> y[ny];
+  int<lower=0> y_obs[n_obs];
   
   // Initial time of unobserved, undelayed time series
-  int tx_min;
+  int t_unobs_min;
   
   // Length of unobserved, undelayed time series
-  int nx;
+  int n_unobs;
 }
 
 transformed data {
-  // Scale of y observations, used to scale priors for x
-  real sd_scale_x = max(y);
+  // Scale of observations, used to scale priors for unobserved states
+  real sd_scale_x = max(y_obs);
 }
 
 parameters {
+  // An inferred floor for Poisson means, making zeros OK
   real<lower=0> poisson_floor;
+  
+  // An inferred scale for the half-normal prior on observed states
   real<lower=0> scale_x;
-  vector<lower=0>[nx] lambda_x;
+  
+  // Unobserved states
+  vector<lower=0>[n_unobs] x_unobs;
 }
 
 transformed parameters {
-  vector[ny] lambda_y;
+  vector[n_obs] lambda_obs = rep_vector(poisson_floor, n_obs);
   
-  for(iy in 1:ny) {
-    int ty = ty_min + iy - 1;
-    lambda_y[iy] = 0.0;
-    for(ip in 1:np) {
-      int dt = dt_min + ip - 1;
-      int t = ty - dt;
-      int x_index = t - tx_min + 1;
-      if(x_index >= 1 && x_index <= nx) {
-        lambda_y[iy] += p[ip] * lambda_x[x_index];
+  // Compute lambda_obs by directly looping over all unobserved states
+  // and all delays.
+  for(i_unobs in 1:n_unobs) {
+    int t_unobs = t_unobs_min + i_unobs - 1;
+    for(i_delay in 1:n_delay) {
+      int delay = delay_min + i_delay - 1;
+      int t_obs = t_unobs + delay;
+      int i_obs = t_obs - t_obs_min + 1;
+      if(i_obs >= 1 && i_obs <= n_obs) {
+        lambda_obs[i_obs] += pmf_delay[i_delay] * x_unobs[i_unobs];
       }
     }
-    lambda_y[iy] = poisson_floor + lambda_y[iy];
   }
 }
 
 model {
   poisson_floor ~ exponential(1.0);
   scale_x ~ normal(0, sd_scale_x);
-  lambda_x ~ normal(0, scale_x);
-  y ~ poisson(lambda_y);
+  x_unobs ~ normal(0, scale_x);
+  y_obs ~ poisson(lambda_obs);
 }
