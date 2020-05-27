@@ -23,19 +23,31 @@ data {
   // Length of unobserved, undelayed time series
   int n_unobs;
   
-  // Scale of observations, used to scale prior for unobserved states
-  real<lower=0> scale_scale_x;
+  // Scale for initial unobserved state
+  real<lower=0> scale_x_unobs_init;
+  
+  // Scale for random walk prior SD
+  real<lower=0> scale_sd_dlogx_unobs;
 }
 
 parameters {
-  // An inferred scale for the half-normal prior on unobserved states
-  real<lower=0> scale_x;
+  // Initial unobserved state
+  real<lower=0> x_unobs_init;
   
-  // Unobserved states
-  vector<lower=0>[n_unobs] x_unobs;
+  // SD for the random walk on log(unobserved state)
+  real<lower=0> sd_dlogx_unobs;
+  
+  // Changes in log(unobserved state) over time, on normal(0, 1) scale
+  vector[n_unobs - 1] dlogx_unobs_unscaled;
 }
 
 transformed parameters {
+  vector[n_unobs] x_unobs = exp(
+    cumulative_sum(append_row(
+      log(x_unobs_init),
+      sd_dlogx_unobs * dlogx_unobs_unscaled
+    ))
+  );
   vector[n_obs] lambda_obs = rep_vector(1e-10, n_obs);
   
   // Compute lambda_obs by directly looping over all unobserved states
@@ -54,7 +66,9 @@ transformed parameters {
 }
 
 model {
-  scale_x ~ normal(0, scale_scale_x);
-  x_unobs ~ normal(0, scale_x);
+  x_unobs_init ~ normal(0, scale_x_unobs_init);
+  dlogx_unobs_unscaled ~ normal(0, 1);
+  sd_dlogx_unobs ~ normal(0, scale_sd_dlogx_unobs);
+  
   y_obs ~ poisson(lambda_obs);
 }

@@ -1,0 +1,143 @@
+---
+title: "Bayesian deconvolution of delayed incidence"
+output: html_notebook
+---
+
+This notebook simulates a stochastic SEIR, convolves it with a discretized
+gamma distribution, makes noisy observations, and infers the undelayed signal
+using the correct delay distribution.
+
+The model assumes the following:
+
+* The observations follow a Poisson distribution whose mean is equal to the
+  convolution of the unobserved state with the delay distribution, plus a
+  nonzero floor (to allow for zeros in the delay distribution)
+* Unobserved states have independent priors whose scale is inferred;
+  the scale has a half-normal prior whose scale is equal to the largest value
+  in the observation data.
+
+## Preamble
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(rstan)
+source('../R/util.R')
+source('../R/seir.R')
+```
+
+
+## Simulate stochastic SEIR
+
+```{r}
+sim_df <- {
+  N <- 1e5
+  E_frac <- 0.01
+  E_init <- N * E_frac
+  simulate_seir(
+    arnaught = 2.0,
+    t_E = 2,
+    t_I = 4,
+    N = N,
+    S_init = N - E_init,
+    E_init = E_init,
+    I_init = 0,
+    n_t = 50,
+    n_steps_per_t = 10,
+    method = 'stochastic'
+  ) %>% filter(time > 0)
+}
+
+ggplot(sim_df, aes(x = time, y = dS)) +
+  geom_col()
+```
+
+## Make a delay distribution from a discretized gamma
+
+```{r}
+delay_dist <- {
+  t <- seq(0, 39)
+  p_unnorm <- pgamma(t + 1, shape = 2.5, rate = 0.25) - pgamma(t, shape = 2.5, rate = 0.25)
+  
+  data.frame(delay = t, pmf = p_unnorm / sum(p_unnorm))
+}
+
+ggplot(delay_dist, aes(x = delay, y = pmf)) +
+  geom_col()
+  
+```
+
+## Delay incidence curve (dS) and make some right-censored, noisy observations
+
+```{r}
+p_obs <- 0.5
+obs_df <- {
+  y <- convolve_delay(sim_df$dS, delay_dist$pmf)[1:50]
+  data.frame(time = 1:length(y), y = rpois(length(y), p_obs * y))
+}
+
+ggplot(obs_df, aes(x = time, y = y)) +
+  geom_col()
+```
+
+## Deconvolve
+
+```{r}
+model <- stan_model('../stan/deconvolve-uncorrelated.stan')
+```
+
+```{r}
+model_input_data <- list(
+  delay_min = delay_dist$delay[1],
+  n_delay = length(delay_dist$pmf),
+  pmf_delay = delay_dist$pmf,
+  t_obs_min = obs_df$time[1],
+  n_obs = nrow(obs_df),
+  y_obs = obs_df$y,
+  t_unobs_min = sim_df$time[1],
+  n_unobs = nrow(sim_df),
+  
+  scale_scale_x = max(obs_df$y)
+)
+```
+
+
+## Fit
+
+(Should just take 10 seconds or so.)
+
+```{r}
+fit <- sampling(model, model_input_data, chains = 1, cores = 1)
+params <- rstan::extract(fit)
+```
+
+## Plot the result
+
+Legend:
+
+* Dotted black line: observed data
+* Solid black line: original signal multiplied by observation probability
+* Solid red line: inferred signal
+* Gray ribbon: 95% posterior interval
+
+```{r}
+result_df <- sim_df %>%
+  left_join(
+    tibble(
+      time = 1:nrow(sim_df),
+      xhat_mean = colMeans(params$x_unobs),
+      xhat_025 = apply(params$x_unobs, 2, function(x) quantile(x, 0.025)),
+      xhat_975 = apply(params$x_unobs, 2, function(x) quantile(x, 0.975))
+    ),
+    by = 'time'
+  )
+
+ggplot(result_df) +
+  geom_ribbon(aes(x = time, ymin = xhat_025, ymax = xhat_975), fill = 'lightgray') +
+  geom_line(aes(x = time, y = p_obs * dS)) +
+  geom_line(aes(x = time, y = xhat_mean), color = 'red') +
+  geom_line(data = obs_df, mapping = aes(x = time, y = y), lty = 2)
+```
+
+The estimates tip up at the end simply because the intervals are wide,
+driven by the prior alone.
