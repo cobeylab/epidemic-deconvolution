@@ -219,11 +219,11 @@ check_args <- function(
   arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   # Check all input parameters
-  stopifnot(length(N) == 1 && N >= 1 && is.wholenumber(N))
-  stopifnot(length(n_t) == 1 && n_t >= 1 && is.wholenumber(n_t))
+  stopifnot(length(N) == 1 && N >= 1 && N == round(N))
+  stopifnot(length(n_t) == 1 && n_t >= 1 && n_t == round(n_t))
   stopifnot(
-    is.wholenumber(n_steps_per_t) && length(n_steps_per_t) == 1 &&
-      n_steps_per_t >= 1
+    length(n_steps_per_t) == 1 && n_steps_per_t >= 1 &&
+    n_steps_per_t == round(n_steps_per_t)
   )
   stopifnot(
     is.numeric(arnaught) && arnaught > 0 &&
@@ -235,11 +235,4 @@ check_args <- function(
   stopifnot(
     is.numeric(t_I) && length(t_I) == 1 && t_I > 0
   )
-}
-
-#' is.wholenumber
-#'
-#' Returns whether each element of `x` is an integer.
-is.wholenumber <- function(x) {
-  x == round(x)
 }

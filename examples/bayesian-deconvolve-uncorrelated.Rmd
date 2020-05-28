@@ -22,7 +22,7 @@ The model assumes the following:
 library(ggplot2)
 library(dplyr)
 library(rstan)
-source('../R/util.R')
+source('../R/convolve_delay.R')
 source('../R/seir.R')
 ```
 
@@ -107,7 +107,10 @@ model_input_data <- list(
 (Should just take 10 seconds or so.)
 
 ```{r}
-fit <- sampling(model, model_input_data, chains = 1, cores = 1)
+fit <- sampling(
+  model, model_input_data, chains = 1, cores = 1,
+  control = list(adapt_delta = 0.99, max_treedepth = 50)
+)
 params <- rstan::extract(fit)
 ```
 
@@ -139,5 +142,4 @@ ggplot(result_df) +
   geom_line(data = obs_df, mapping = aes(x = time, y = y), lty = 2)
 ```
 
-The estimates tip up at the end simply because the intervals are wide,
-driven by the prior alone.
+I think the estimates tip up at the end simply because the intervals are wide, driven by the prior alone.
