@@ -3,10 +3,9 @@ title: "Bayesian deconvolution of delayed incidence, with random walk"
 output: html_notebook
 ---
 
-This notebook simulates a stochastic SEIR, convolves it with a discretized
-gamma distribution, makes noisy observations, and infers the undelayed signal
-using the correct delay distribution, assuming a random walk on
-log(incidence).
+This notebook simulates a deterministic SEIR, convolves it with a discretized
+gamma distribution, makes noisy observations, and infers the undelayed signal using the correct delay distribution and the , assuming a random walk on
+log(Rt).
 
 The model assumes the following:
 
@@ -77,10 +76,10 @@ ggplot(delay_dist, aes(x = delay, y = pmf)) +
 inf_dist <- {
   stopifnot(t_E == t_I)
   
-  dt <- seq(0, 20)
+  dt <- seq(1, 20)
   shape <- 2
   rate <- 1 / t_E
-  p_unnorm <- pgamma(dt + 1, shape = shape, rate = rate) - pgamma(dt, shape = shape, rate = rate)
+  p_unnorm <- pgamma(dt, shape = shape, rate = rate) - pgamma(dt - 1, shape = shape, rate = rate)
   
   data.frame(dt = dt, pmf = p_unnorm / sum(p_unnorm))
 }
@@ -140,7 +139,7 @@ model_input_data <- list(
 ```{r}
 fit <- sampling(
   model, model_input_data, chains = 1, cores = 1,
-  control = list(adapt_delta = 0.99, max_treedepth = 50)
+  control = list(adapt_delta = 0.95, max_treedepth = 25)
 )
 params <- rstan::extract(fit)
 ```
