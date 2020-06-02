@@ -3,12 +3,12 @@ title: "Bayesian deconvolution of delayed incidence, with random walk"
 output: html_notebook
 ---
 
-This notebook simulates a deterministic SEIR, convolves it with a discretized
-gamma distribution, makes noisy observations, and infers the undelayed signal using the correct delay distribution and the , assuming a random walk on
-log(Rt).
+This notebook simulates a stochastic SEIR, convolves it with a discretized gamma distribution, makes noisy observations, and simultaneously infers $R_t$ and deconvolved states given known PMFs for both the delay distribution and the "infectious profile".
 
 The model assumes the following:
 
+* Log(Rt) follows a random walk whose standard deviation is inferred.
+* Observations follow a continuous approximation to a beta-binomial distribution, 
 * The observations follow a Poisson distribution whose mean is equal to the
   convolution of the unobserved state with the delay distribution, plus a
   nonzero floor (to allow for zeros in the delay distribution)
@@ -47,9 +47,12 @@ sim_df <- {
     I_init = 0,
     n_t = 50,
     n_steps_per_t = 10,
-    method = 'deterministic'
+    method = 'stochastic'
   ) %>% filter(time > 0)
-}
+} %>%
+  mutate(
+    rt = arnaught * S / N
+  )
 
 ggplot(sim_df, aes(x = time, y = dS)) +
   geom_line()
@@ -172,7 +175,7 @@ ggplot(result_df) +
   geom_line(data = obs_df, mapping = aes(x = time, y = y), lty = 2)
 ```
 
-Badly overconfident in first few timesteps...
+Not bad...
 
 ## Plot Rt
 
@@ -190,7 +193,9 @@ result_df <- sim_df %>%
 
 ggplot(result_df) +
   geom_ribbon(aes(x = time, ymin = rt_025, ymax = rt_975), fill = 'lightgray') +
+  geom_line(aes(x = time, y = rt)) +
   geom_line(aes(x = time, y = rt_mean))
 ```
 
-Very bad Rt in the first few timesteps.
+Also pretty good.
+TODO: comp
