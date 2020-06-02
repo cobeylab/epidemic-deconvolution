@@ -139,7 +139,7 @@ model_input_data <- list(
 ```{r}
 fit <- sampling(
   model, model_input_data, chains = 1, cores = 1,
-  control = list(adapt_delta = 0.95, max_treedepth = 25)
+  control = list(adapt_delta = 0.99, max_treedepth = 50)
 )
 params <- rstan::extract(fit)
 ```

@@ -119,16 +119,51 @@ transformed parameters {
   vector[n_obs] lambda_obs = rep_vector(1e-10, n_obs);
   
   // Compute x_unobs by directly applying Rt
-  for(t_primary in t_unobs_min:t_max) {
+  for(t_secondary in t_unobs_min:t_max) {
+    int i_secondary = t_secondary - t_unobs_min + 1;
+    real pmf_inf_norm = 0.0;
+    
+    // Compute normalization for pmf to handle left-censoring of Rt
     for(i_inf in 1:n_dt_inf) {
       int dt_inf = dt_inf_min + i_inf - 1;
-      int t_secondary = t_primary + dt_inf;
-      int i_secondary = t_secondary - t_unobs_min + 1;
-      if(i_secondary >= 1 && i_secondary <= n_unobs) {
-        x_unobs[i_secondary] += x_unobs[t_primary] * rt[t_primary] * pmf_inf[i_inf];
+      int t_primary = t_secondary - dt_inf;
+      int i_primary = t_primary - t_unobs_min + 1;
+      if(i_primary >= 1) {
+        pmf_inf_norm += pmf_inf[i_inf];
+      }
+    }
+    
+    // Compute new infections from past infections
+    for(i_inf in 1:n_dt_inf) {
+      int dt_inf = dt_inf_min + i_inf - 1;
+      int t_primary = t_secondary - dt_inf;
+      int i_primary = t_primary - t_unobs_min + 1;
+      if(i_primary >= 1) {
+        x_unobs[i_secondary] += x_unobs[i_primary] * rt[i_primary] * pmf_inf[i_inf] / pmf_inf_norm;
       }
     }
   }
+  
+  
+  // for(t_primary in t_unobs_min:t_max) {
+  //   real pmf_inf_norm = 0.0;
+  //   
+  //   for(i_inf in 1:n_dt_inf) {
+  //     int dt_inf = dt_inf_min + i_inf - 1;
+  //     int t_secondary = t_primary + dt_inf;
+  //   }
+  //   
+  //   
+  //   for(i_inf in 1:n_dt_inf) {
+  //     int dt_inf = dt_inf_min + i_inf - 1;
+  //     int t_secondary = t_primary + dt_inf;
+  //     int i_secondary = t_secondary - t_unobs_min + 1;
+  //     if(i_secondary >= 1 && i_secondary <= n_unobs) {
+  //       int i_primary = t_primary - t_unobs_min + 1;
+  //       x_unobs[i_secondary] += x_unobs[i_primary] * rt[i_primary] * pmf_inf[i_inf];
+  //     }
+  //   }
+  // }
   
   // Compute lambda_obs by directly looping over all unobserved states
   // and all delays
