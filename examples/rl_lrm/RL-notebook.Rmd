@@ -1,0 +1,446 @@
+---
+title: "Richardson-Lucy Deconvolution Methods for Back-calculating Incidence data"
+output: html_notebook
+---
+
+RL deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
+
+Last updated: 6-22-2020
+
+## Introduction
+
+One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of \emph{infection}, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
+Moreover, this delay distribution is probabilistic, and typically not known, although it may be estimated based on assumptions and empirical measurements of the course of the disease and the measurement process itself. 
+
+The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is \emph{deconvolution}, although many current methods in use effectively amount to \emph{convolution}, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
+
+One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method \cite{GOLDSTEIN}, an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
+
+Here, we apply the RL method to synthetic data generated from stochastic SEIR models in order to assess its performance on synthetic data where the input curve is known exactly, beginning with the traditional RL method and then assessing its performance in the case where the delay distribution is unknown or misspecified.
+
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(cowplot)
+library(EpiEstim)
+library(fs)
+library(magic)
+library(corpcor)
+theme_set(theme_bw())
+
+#intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
+intervention_length_name <- "_obs_1"
+intervention_file_name <- sprintf("intervention%s", intervention_length_name)
+if (!dir.exists(intervention_file_name)) {
+  dir.create(intervention_file_name)
+}
+```
+
+```{r}
+if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
+  parlist <- readRDS(sprintf("%s/params.Rds", intervention_file_name))
+} else {
+  ## Set parameters to simulate SEIR epidemic
+  parlist <- {
+    list(
+      N = 2e6, #total population size
+      E_init = 0,
+      I_init = 10,
+      t_E = 4, # mean time in E (latent period)
+      t_I = 4, # mean time in I (duration of infectiousness)
+      n_t = 300, # total timesteps
+      pre_intervention_R0 = 2, # Initial R0 before interventions
+      intervention_R0 = 0.8, # Final R0 after interventions
+      partially_lifeted_R0 = 0.9,
+      intervention_time_1 = 62, # Timepoint at which intervention starts (at which underlying transmission rate begins to fall)
+      intervention_time_2 = 62+200,
+      days_intervention_to_min = c(7), # Days from intervention start until transmission rate hits min_R0
+      days_to_Rt_rise = 1,
+      model_types = c('seir'), # Can also choose sir
+      methods = c('stochastic'), # could also choose ode, but would have to modify it to have integer case counts
+      obs_1_offset = 10, #the first observation is at 1+length(delay dist)+obs_1_offset
+      obs_2_offset = 75, #the last observation is at 1+length(delay dist)+obs_1_offset+obs_2_offset
+      max_RL_it = 10,
+      delay_distr_shape = 5.8, 
+      delay_distr_scale = 0.95, 
+      time_to_obs = 4,
+      delay_distr_shape_mult = 1,
+      delay_distr_scale_mult = 1,
+      time_to_obs_mult = 1#,
+      #num_blind_it = 50,
+      #num_delay_it = 10,
+      #num_u_it = 20
+    )
+  }  
+  ## Derive the mean and variance of the serial interval from the input parameters
+  parlist$true_mean_SI = (parlist$t_E+parlist$t_I)
+  parlist$true_var_SI = 2*parlist$true_mean_SI^2
+  saveRDS(parlist, file = sprintf("%s/params.Rds", intervention_file_name))
+}
+```
+
+```{r}
+## Output cori estimate with mean, CI and times given an input df, and the name of the incidence column
+# Note that here, we're using the option that samples over serial intervals and std of serial intervals
+get_cori <- function(df.in, 
+                     icol_name, 
+                     out_name = 'Cori',
+                     window = 1, 
+                     SI_mean=parlist$true_mean_SI, 
+                     SI_var=2*(parlist$true_mean_SI/2)^2,
+                     wend = TRUE){
+  idat <- df.in %>%
+    filter(get(icol_name) > 0 & !is.na(get(icol_name))) %>%
+    complete(time = 2:max(time))%>%
+    mutate_all(.funs = function(xx){ifelse(is.na(xx), 0, xx)})
+  
+  ts <- idat$time
+  ts <- ts[ts > 1 & ts < (max(ts)-window+1)]
+  te<- ts+(window-1)
+  
+  estimate_R(
+    incid = pull(idat, eval(icol_name)),
+    method = "parametric",
+    config = make_config(
+      list(
+        mean_si = SI_mean,
+        #min_mean_si = SI_mean -1,
+        #max_mean_si = SI_mean + 1,
+        #std_mean_si = 1.5,
+        #std_std_si = 1.5,
+        std_si = sqrt(SI_var),
+        #min_std_si = sqrt(SI_var)*.8,
+        #max_std_si = sqrt(SI_var)*1.2,
+        #n1 = 50,
+        #n2 = 100, 
+        t_start=ts,
+        t_end=te
+        )
+      )
+    ) -> outs
+  
+  outs$R %>%
+    mutate(time = if(wend == TRUE) t_end else ceiling((t_end+t_start)/2) ) %>%
+    select(time, `Mean(R)`, `Quantile.0.025(R)`, `Quantile.0.975(R)`) %>%
+    setNames(c('time', paste0(out_name, '.mean'), paste0(out_name, '.025'), paste0(out_name, '.975')))
+}
+```
+
+```{r}
+## Simulate SEIR data using a stochastic (ode) model. Putting the R0 and simplots folders in the intervention file.
+source('funs_simulation-sweep.R')
+sim_sweep(parlist)
+testplots(parlist)
+
+file_move("R0-2.0", intervention_file_name)
+file_move("simplots", intervention_file_name) 
+```
+
+
+```{r}
+## Write a function to extract the simulation results as a data frame
+stoch_df <- function(){
+  readRDS(sprintf('%s/R0-%.1f/seir_%s_dec%.0f-%.0f_sim.rds',
+                  intervention_file_name,
+                  parlist$pre_intervention_R0, 
+                  parlist$methods,
+                  parlist$intervention_time_1, 
+                  parlist$days_intervention_to_min))$sim_df 
+}
+
+stoch_df() %>%
+ggplot() +
+  geom_line(aes(x = time, y = incidence))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1), lty = 2)+ ## Dashed line where Rt starts to decrease
+    geom_vline(aes(xintercept = parlist$intervention_time_2), lty = 2)+ ## Dashed line where Rt starts to decrease
+  ggtitle('Daily infections, SEIR simulation') -> inc
+
+stoch_df() %>% 
+  ggplot()+
+  geom_line(aes(x = time, y = true_r0)) +
+  geom_hline(aes(yintercept = 1), lty = 2)+
+  ylab('R0')+
+  ggtitle('Input Rt values') -> R0
+
+plot_grid(R0, inc, rel_heights = c(1,2), align = 'hv', nrow = 2)
+
+stoch_df
+```
+
+## RL with Option for Misspecified Delay Distribution
+
+
+
+```{r}
+source('funs_impute_obs_times.R')
+
+## Set the delay distribution to observation
+obs_delay_dist <- function(nn){
+  #r_inc_dist <- function(n){rgamma(n, shape = 5.8, scale = 0.95)} # Incubation period (infection -> symptoms)
+  #r_sym_to_obs_dist <- function(n){runif(n, 0, 4)} # Additional delay from symptoms -> observation
+  r_inc_dist <- function(n){rgamma(n, shape = parlist$delay_distr_shape, scale = parlist$delay_distr_scale)} # Incubation period (infection -> symptoms)
+  r_sym_to_obs_dist <- function(n){runif(n, 0, parlist$time_to_obs)} # Additional delay from symptoms -> observation
+  r_inc_dist(nn) + r_sym_to_obs_dist(nn)
+#  rep(20, nn)
+}
+
+misspec_obs_delay_dist <- function(nn){
+  r_inc_dist <- function(n){rgamma(n, shape = parlist$delay_distr_shape*parlist$delay_distr_shape_mult, scale = parlist$delay_distr_scale*parlist$delay_distr_scale_mult)} # Incubation period (infection -> symptoms)
+  r_sym_to_obs_dist <- function(n){runif(n, 0, parlist$time_to_obs*parlist$time_to_obs_mult)} # Additional delay from symptoms -> observation
+  r_inc_dist(nn) + r_sym_to_obs_dist(nn)
+#  rep(20, nn)
+}
+
+parlist$time_to_obs_mult
+
+## Append number of new daily infections to simulation dataframe
+sim_df <- stoch_df() %>%
+  filter(time < max(time)) %>%
+  mutate(
+    new_infected = ifelse(is.na(dS), 0, dS))
+```
+
+```{r, echo=FALSE}
+#get_tObs_from_tInf(sim_df$new_infected, sim_df$time, obs_delay_dist, return_times = T)
+sim_df %>%
+  merge(
+    get_tObs_from_tInf(sim_df$new_infected, sim_df$time, obs_delay_dist, return_times = T),
+    by = 'time', all = TRUE) %>% 
+  rename(new_observed = n) %>%
+  as.tbl() -> sim_df
+
+```
+
+```{r, echo=FALSE}
+#ASSUMING A MISSPECIFIED DELAY DISTRIBUTION
+misspec_obs_delay_dist(10000000)  %>%
+#    ceiling() %>%
+  tabulate()*1/10000000 -> delay_distr_vec #could also set nbins = const, which would set the length of the delay distribution to always be const, at the expense of potentially having 0's
+
+len_diff <- length(sim_df$new_infected)-length(delay_distr_vec)
+
+delay_distr_vec
+#length(delay_distr_vec)
+
+#plot(1:length(delay_distr_vec), delay_distr_vec)
+
+```
+
+
+```{r}
+
+new_inf_no_na <- ifelse(is.na(sim_df$new_infected), 0, sim_df$new_infected) #number of cases at the S -> E transition. This is what RL will be trying to reproduce.
+#new_obs_no_na <- ifelse(is.na(sim_df$new_observed), 0, sim_df$new_observed)
+#obs_cases <- get_tObs_from_tInf(new_inf_no_na, 
+#                              times=1:length(new_inf_no_na), 
+#                               r_delay_dist=obs_delay_dist,
+#                               return_times = FALSE)
+new_obs_no_na <- ifelse(is.na(sim_df$new_observed), 0, sim_df$new_observed) #this is the "data" vector we will apply RL to. 
+
+#new_obs_no_na
+```
+
+```{r}
+u_true <- new_inf_no_na 
+p_unnorm <- c(0.000001, ifelse(delay_distr_vec==0, 0.000001, delay_distr_vec)) #the first element is the probability of delay = 0
+p <- p_unnorm/sum(p_unnorm)
+#d <- convolve(u_true, rev(p), type = "open")
+#print(d)
+d <- new_obs_no_na
+
+#plot(1:length(u_true), u_true)
+#points(1:length(d), d, col = 'red')
+#points(1:length(new_obs_no_na), new_obs_no_na, col ='blue')
+
+#note: obs_1 must be at least length(p) in this formulation. might find a way to change it so that only have to use most of p
+#length(p)
+obs_1 <- length(p)+1+parlist$obs_1_offset
+obs_2 <- obs_1 + parlist$obs_2_offset
+d_obs <- d[obs_1:obs_2]
+#d_obs
+#length(d_obs)
+
+
+
+u_obs_guess <- c(d_obs, rep(max(d_obs[length(d_obs)],1), length(p)-1))
+#u_obs_guess
+
+#In appendix to the Lipsitch paper, the conventions are:
+#p_ij is indexed by i = number of observations len_d_obs and j = number of "sources" u_obs.
+#the normalized \hat{p}_ij is given by p_ij/\sum_i p_ij
+#the thing you solve for here is u_guess = q_j*(number of infections)_j
+#in order to recover true number of infections, have to divide by u_guess by q_j
+#pmat <- circulant(c(p, rep(0, length(p)+length(d_obs)-1)))
+pmat <- circulant(c(p, rep(0, obs_2)))
+#pmat
+#dim(pmat)
+p_ij_obs <- pmat[(obs_1-length(p)+1):obs_2, obs_1:obs_2]
+#p_ij_obs <- pmat[obs_1:obs_2, 1:length(u_obs_guess)]
+p_ij_obs <- t(p_ij_obs)
+#p_ij_obs
+#p_ij_obs %*% u_obs_guess
+#convolve(u_obs_guess, rev(p), type = "open")
+pseudo_inv_pij_obs <- pseudoinverse(p_ij_obs)
+#pseudo_inv_pij_obs
+#Below: observe that u_try is not equal to u_obs_guess - i.e., when there's a boundary (as here), can't do the naive deconvolution this way
+#u_try <- pseudo_inv_pij_obs%*%d_obs
+#u_try
+
+q_j <- colSums(p_ij_obs)
+#q_j
+dim_p_ij <- dim(p_ij_obs)
+p_ij_obs_rescaled <- p_ij_obs / matrix(q_j,nrow=dim_p_ij[1],ncol=dim_p_ij[2],byrow=TRUE)
+#p_ij_obs_rescaled
+u_obs_guess_rescaled <- u_obs_guess * q_j
+#u_obs_guess_rescaled
+d_obs_rescaled <- d_obs * q_j[(length(p)):length(u_obs_guess_rescaled)]
+
+get_chi_sq <- function (vec1, vec2) {
+  n0 <- length(vec1)
+  (1/n0)*sum(((vec1 - vec2)^2/vec1))
+}
+
+u_obs_rescaled <- u_obs_guess_rescaled
+chi_sq <- get_chi_sq(d_obs_rescaled, u_obs_rescaled[length(p):length(u_obs_rescaled)])
+#u_obs_rescaled
+#chi_sq
+ind <- 1
+parlist$max_RL_it
+while (chi_sq > 1 & ind < parlist$max_RL_it) {
+  c_obs <-p_ij_obs_rescaled %*% u_obs_rescaled
+  #print(c_obs)
+  new_kernel_obs <- d_obs/c_obs
+  #print(t(new_kernel_obs)%*%p_ij_obs_rescaled)
+  #print(u_obs_rescaled)
+  new_u_obs_rescaled <- u_obs_rescaled * t(t(new_kernel_obs) %*% p_ij_obs_rescaled)
+  #print(new_u)
+  u_obs_rescaled <- new_u_obs_rescaled
+  chi_sq <- get_chi_sq(d_obs_rescaled, u_obs_rescaled[length(p):length(u_obs_rescaled)])
+  ind <- ind+1
+}
+ #ind 
+#u_obs_rescaled
+u_obs_new <- u_obs_rescaled/q_j
+#u_obs_new
+#plot((obs_1 - length(p) + 1):obs_2, u_obs_new, ylim = c(0, 60), xlim = c(0, 200), type = 'l') #observe: u_obs_new is essentially a precise match to u_true where they are both defined. just have to define the time right as compared to d.
+#lines(1:length(u_true), u_true, col = 'red') #this is longer than u_obs_new because it's all of u, not just the subset gotten from "observed"
+#points((obs_1 - length(p) + 1):obs_2, u_obs_guess, col = 'blue')
+#lines(1:length(d), d, col = 'green') # this is what we observe - should be shifted from infections
+
+#obs_1
+
+```
+
+```{r}
+
+inferred_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, u_obs_new)
+names(inferred_df) <- c('time', "new_inferred")
+#print(inferred_df)
+
+#Hack for fixing indexing of time variable to be consistent between dataframes
+inferred_df$time <- inferred_df$time - 1
+sim_df$time <- sim_df$time + 1
+
+sim_df %>%
+  merge(inferred_df, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>% 
+  filter(data_type == "new_inferred"| data_type == "new_infected" | data_type == "new_observed") %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_vline(aes(xintercept = parlist$intervention_time_1), linetype = "dotted") +
+  scale_linetype_manual(values=c("solid", "solid", "dotted")) + 
+  scale_color_manual(values = c("blue", "red", "green")) +
+  labs(color = "Infections", linetype = "Infections") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle('Number of inferred cases from Richardson-Lucy') -> inferred_plot
+
+inferred_plot
+
+saveRDS(inferred_plot, sprintf("%s/all-case-curves.Rds", intervention_file_name))
+ggsave(sprintf("%s/all-case-curves.png", intervention_file_name))
+
+```
+
+```{r}
+#diff <-  u_obs_new - u_true[(obs_1 - length(p) + 1):obs_2]
+
+diff <-  u_obs_new - u_true[(obs_1 - length(p)):(obs_2-1)]
+
+sim_df2 <- sim_df
+diff_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff)
+names(diff_df) <- c('time', "diff")
+
+sim_df2 %>%
+  merge(diff_df, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>%
+  filter(data_type == "diff" & !is.na(count)) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_hline(aes(yintercept = 0, color = 'zero', linetype = 'zero'))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) +
+  scale_linetype_manual(values=c("solid", "dotted", "dashed")) + 
+  scale_color_manual(values = c("blue", "black", "black")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend") +
+  ylab("count (difference)")+
+  xlab("time (days)") + 
+  ggtitle('Difference in number of inferred cases from Richardson-Lucy') -> diff_plot
+
+diff_plot
+
+saveRDS(diff_plot, sprintf("%s/difference-cases-RL.Rds", intervention_file_name))
+ggsave(sprintf("%s/difference-cases-RL.png", intervention_file_name))
+
+```
+
+```{r}
+cori_df <- get_cori(df.in = sim_df, icol_name = "incidence")
+cori_inferred <- get_cori(df.in = inferred_df, icol_name = "new_inferred")
+```
+
+```{r}
+all_cori_df <- merge(cori_df, cori_inferred, by = "time")
+r0_df <- stoch_df()
+merge(all_cori_df, r0_df, by = "time") -> new_all_df
+
+new_all_df %>%
+  filter(!is.na(Cori.mean.x) & !is.na(Cori.mean.y) & Cori.mean.y < 5 & Cori.975.y < 8) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "one", color = "one")) + 
+  geom_line(aes(x = time, y = true_r0, color = "true_Rt", linetype = "true_Rt"), size = 1) +
+  geom_line(aes(x = time, y = Cori.mean.x, color = "true_infections", linetype = "true_infections")) + 
+  geom_line(aes(x = time, y = Cori.mean.y, color = "inferred_infections", linetype = "inferred_infections")) +
+  geom_ribbon(aes(x = time, ymin=Cori.025.x, ymax = Cori.975.x, fill = "true_infections"), alpha=0.3, show.legend = FALSE) + 
+  geom_ribbon(aes(x = time, ymin=Cori.025.y, ymax = Cori.975.y, fill = "inferred_infections"), alpha=0.3, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) + 
+  scale_linetype_manual(values=c("solid", "dotted", "dashed", "solid", "solid")) + 
+  scale_color_manual(values = c("red", "black", "black", "blue", "black")) +
+  scale_fill_manual(values = c("red", "blue")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') -> new_all_plot
+
+new_all_plot
+
+saveRDS(new_all_plot, sprintf("%s/rt_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/rt_plot.png", intervention_file_name))
+```
+
+```{r}
+
+plot_grid(inferred_plot, diff_plot, new_all_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+
+all_plot
+
+saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/all_plot.png", intervention_file_name))
+
+```
