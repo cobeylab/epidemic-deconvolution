@@ -1,5 +1,7 @@
 ## Impute times of observagtion from times of infection
 
+##Author: Katie Gostic
+
 
 #' This function draws a random sample of size n from the delay distribution (the distribution of times from infection to case observation)
 #' Specify the incubation period distribution as gamma(shape = 2, scale = 3) (mean of 6d)
@@ -19,7 +21,6 @@ SEIR_delay_dist <- function(nn){
 }
 
 
-#LAUREN got rid of the uniform distribution step to see if that is causing the shift
 #' This function imputes times of case observation from true, underlying times of infection output by the S->E transition in the SEIR model.
 #' @param n_dS is a vector of n infections incident on day t
 #' @param times is a vector of times, corresponding to the entries of n_dS

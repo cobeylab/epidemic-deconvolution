@@ -2,6 +2,8 @@
 source('simulation.R')
 source('util.R')
 
+##Author: Katie Gostic
+
 ## Define functions to simulate and plot data using SEIR 
 
 sim_sweep <- function(PARAMS){
