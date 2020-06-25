@@ -64,7 +64,7 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       obs_1_offset = 10, #the first observation is at 1+length(delay dist)+obs_1_offset
       obs_2_offset = 75, #the last observation is at 1+length(delay dist)+obs_1_offset+obs_2_offset
       max_RL_it = 10,
-      delay_distr_shape = 5.8, 
+      delay_distr_shape = 10, #5.8, 
       delay_distr_scale = 0.95, 
       time_to_obs = 4,
       delay_distr_shape_mult = 1,
@@ -398,7 +398,40 @@ saveRDS(diff_plot, sprintf("%s/difference-cases-RL.Rds", intervention_file_name)
 ggsave(sprintf("%s/difference-cases-RL.png", intervention_file_name))
 
 ```
+```{r}
+#diff <-  u_obs_new - u_true[(obs_1 - length(p) + 1):obs_2]
 
+diff_percent <-  (u_obs_new - u_true[(obs_1 - length(p)):(obs_2-1)])/(u_true[(obs_1 - length(p)):(obs_2-1)])
+
+#diff_percent
+
+sim_df3 <- sim_df
+diff_df_percent <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff_percent)
+names(diff_df_percent) <- c('time', "diff_percent")
+
+sim_df3 %>%
+  merge(diff_df_percent, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>%
+  filter(data_type == "diff_percent" & !is.na(count)) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_hline(aes(yintercept = 0, color = 'zero', linetype = 'zero'))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) +
+  scale_linetype_manual(values=c("solid", "dotted", "dashed")) + 
+  scale_color_manual(values = c("blue", "black", "black")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend") +
+  ylab("count (difference, fraction)")+
+  xlab("time (days)") + 
+  ggtitle('Difference fraction in number of inferred cases from Richardson-Lucy') -> diff_percent_plot
+
+diff_percent_plot
+
+saveRDS(diff_percent_plot, sprintf("%s/difference-percent-cases-RL.Rds", intervention_file_name))
+ggsave(sprintf("%s/difference-percent-cases-RL.png", intervention_file_name))
+
+```
 ```{r}
 cori_df <- get_cori(df.in = sim_df, icol_name = "incidence")
 cori_inferred <- get_cori(df.in = inferred_df, icol_name = "new_inferred")
@@ -436,7 +469,7 @@ ggsave(sprintf("%s/rt_plot.png", intervention_file_name))
 
 ```{r}
 
-plot_grid(inferred_plot, diff_plot, new_all_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+plot_grid(inferred_plot, diff_percent_plot, new_all_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
 
 all_plot
 
