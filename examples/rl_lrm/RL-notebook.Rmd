@@ -5,16 +5,16 @@ output: html_notebook
 
 RL deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 6-22-2020
+Last updated: 6-23-2020
 
 ## Introduction
 
-One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of \emph{infection}, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
+One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of $\textit{infection}$, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
 Moreover, this delay distribution is probabilistic, and typically not known, although it may be estimated based on assumptions and empirical measurements of the course of the disease and the measurement process itself. 
 
-The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is \emph{deconvolution}, although many current methods in use effectively amount to \emph{convolution}, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
+The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is $\textit{deconvolution}$, although many current methods in use effectively amount to $\textit{convolution}$, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
 
-One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method \cite{GOLDSTEIN}, an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
+One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method (Goldstein et al), an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
 
 Here, we apply the RL method to synthetic data generated from stochastic SEIR models in order to assess its performance on synthetic data where the input curve is known exactly, beginning with the traditional RL method and then assessing its performance in the case where the delay distribution is unknown or misspecified.
 
