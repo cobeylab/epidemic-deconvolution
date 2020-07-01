@@ -32,6 +32,8 @@ Observations:
 
 * Inferred curve systematically underestimates the peak.
 
+* **This is an old version of RL-notebook.nb, which may contribute to why it is not working correctly! Abandoning troubleshooting to work on a more recent version of RL-notebook** 
+
 ```{r}
 rm(list = ls())
 library(ggplot2)
