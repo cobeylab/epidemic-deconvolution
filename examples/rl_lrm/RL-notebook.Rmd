@@ -26,7 +26,9 @@ Observations:
 
 * In order to make true infection time line up with true inferred time + Rt time, have to do $\text{true infection time} \to \text{true infection time} + 2$. This indicates that somewhere I am messing up the alignment between definitions of time. It probably has to do with the zero indexing of probability vectors in the RL method. Have to find the issue.
 
-* When first intervention time is $100$ days,$R_t$ for true + inferred points agree with each other, but not with the "true" $R_t$. I don't know why. This becomes evident when first intervention is at $\sim 83$ days. 
+* When first intervention time is $100$ days,$R_t$ for true + inferred points agree with each other, but not with the "true" $R_t$. I don't know why. This becomes evident when first intervention is at $\sim 83$ days.
+
+* When switching "hack" from true cases time + 2 days to inferred cases - 2 days, again, they match each other perfectly, but do not match the true $R_t$. Something is wrong with the time callibration across true/inferred/$R_t$, and I'm not sure what it is, but this is a really important problem to solve.
 
 * Inferred curve systematically underestimates the peak.
 
@@ -44,7 +46,7 @@ library(corpcor)
 theme_set(theme_bw())
 
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_62_obs_2_sim_plus2_hack"
+intervention_length_name <- "_62_obs_1_inferred_minus_2_hack"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -353,8 +355,8 @@ names(inferred_df) <- c('time', "new_inferred")
 #print(inferred_df)
 
 #Hack for fixing indexing of time variable to be consistent between dataframes
-inferred_df$time <- inferred_df$time #- 1
-sim_df$time <- sim_df$time +2
+inferred_df$time <- inferred_df$time - 2
+sim_df$time <- sim_df$time # + 2
 
 sim_df %>%
   merge(inferred_df, by = 'time', all = 'TRUE') %>%
