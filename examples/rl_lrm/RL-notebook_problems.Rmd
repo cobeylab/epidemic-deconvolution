@@ -19,16 +19,11 @@ One method which has been previously shown to be successful for recovering incid
 Here, we apply the RL method to synthetic data generated from stochastic SEIR models in order to assess its performance on synthetic data where the input curve is known exactly, beginning with the traditional RL method and then assessing its performance in the case where the delay distribution is unknown or misspecified.
 
 Observations: 
+* Once the incidence is consistently $$\geq 17$$, the (difference in inferred vs. true infections)/(true infections) is $$\leq 0.5$$; for high incidence is mostly $$\sim 0.02 $$; for last three days, goes to $$0.1 - 0.2$$.
 
-* Even when the intervention occurs at day $62$, the estimates are agreeing with each other after the intervention, but they are both undershooting the true $R_t$. *Not sure why, but this is a big problem.*
+* Right now, in order to make true infection time line up with true inferred time + Rt time, have to do $$\text{true infection time} \to \text{true infection time} + 2$$. This indicates that somewhere I am messing up the alignment between definitions of time. It probably has to do with the zero indexing of probability vectors in the RL method. Have to find the issue.
 
-* Once the incidence is consistently $\geq 17$, the (difference in inferred vs. true infections)/(true infections) is $\leq 0.5$; for high incidence is mostly $\sim 0.02$; for last three days, goes to $0.1 - 0.2$.
-
-* In order to make true infection time line up with true inferred time + Rt time, have to do $\text{true infection time} \to \text{true infection time} + 2$. This indicates that somewhere I am messing up the alignment between definitions of time. It probably has to do with the zero indexing of probability vectors in the RL method. Have to find the issue.
-
-* When first intervention time is $100$ days,$R_t$ for true + inferred points agree with each other, but not with the "true" $R_t$. I don't know why. This becomes evident when first intervention is at $\sim 83$ days. 
-
-* Inferred curve systematically underestimates the peak.
+* Upon further investigation with intervention time equal to $$100$$ days, the $$R_t$$ values are totally shifted - $$R_t$$ values from inferred infections and true infections match each other, but not the true values. Since we know cori method should essentially precisely reproduce correct $$R_t$$ values, we know something is wrong. 
 
 ```{r}
 rm(list = ls())
@@ -44,7 +39,7 @@ library(corpcor)
 theme_set(theme_bw())
 
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_62_obs_2_sim_plus2_hack"
+intervention_length_name <- "_100_obs_1_sim_plus2_hack"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -63,12 +58,12 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       I_init = 10,
       t_E = 4, # mean time in E (latent period)
       t_I = 4, # mean time in I (duration of infectiousness)
-      n_t =600, # total timesteps
+      n_t = 300, # total timesteps
       pre_intervention_R0 = 2, # Initial R0 before interventions
       intervention_R0 = 0.8, # Final R0 after interventions
       partially_lifeted_R0 = 0.9,
-      intervention_time_1 = 83, # Timepoint at which intervention starts (at which underlying transmission rate begins to fall)
-      intervention_time_2 = 83+200,
+      intervention_time_1 = 100, # Timepoint at which intervention starts (at which underlying transmission rate begins to fall)
+      intervention_time_2 = 80+200,
       days_intervention_to_min = c(7), # Days from intervention start until transmission rate hits min_R0
       days_to_Rt_rise = 1,
       model_types = c('seir'), # Can also choose sir
