@@ -5,16 +5,16 @@ output: html_notebook
 
 RL deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 6-22-2020
+Last updated: 6-23-2020
 
 ## Introduction
 
-One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of \emph{infection}, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
+One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of $\textit{infection}$, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
 Moreover, this delay distribution is probabilistic, and typically not known, although it may be estimated based on assumptions and empirical measurements of the course of the disease and the measurement process itself. 
 
-The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is \emph{deconvolution}, although many current methods in use effectively amount to \emph{convolution}, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
+The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is $\textit{deconvolution}$, although many current methods in use effectively amount to $\textit{convolution}$, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
 
-One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method \cite{GOLDSTEIN}, an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
+One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method (Goldstein et al), an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
 
 Here, we apply the RL method to synthetic data generated from stochastic SEIR models in order to assess its performance on synthetic data where the input curve is known exactly, beginning with the traditional RL method and then assessing its performance in the case where the delay distribution is unknown or misspecified.
 
@@ -64,7 +64,7 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       obs_1_offset = 10, #the first observation is at 1+length(delay dist)+obs_1_offset
       obs_2_offset = 75, #the last observation is at 1+length(delay dist)+obs_1_offset+obs_2_offset
       max_RL_it = 10,
-      delay_distr_shape = 5.8, 
+      delay_distr_shape = 10, #5.8, 
       delay_distr_scale = 0.95, 
       time_to_obs = 4,
       delay_distr_shape_mult = 1,
@@ -398,7 +398,40 @@ saveRDS(diff_plot, sprintf("%s/difference-cases-RL.Rds", intervention_file_name)
 ggsave(sprintf("%s/difference-cases-RL.png", intervention_file_name))
 
 ```
+```{r}
+#diff <-  u_obs_new - u_true[(obs_1 - length(p) + 1):obs_2]
 
+diff_percent <-  (u_obs_new - u_true[(obs_1 - length(p)):(obs_2-1)])/(u_true[(obs_1 - length(p)):(obs_2-1)])
+
+#diff_percent
+
+sim_df3 <- sim_df
+diff_df_percent <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff_percent)
+names(diff_df_percent) <- c('time', "diff_percent")
+
+sim_df3 %>%
+  merge(diff_df_percent, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>%
+  filter(data_type == "diff_percent" & !is.na(count)) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_hline(aes(yintercept = 0, color = 'zero', linetype = 'zero'))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) +
+  scale_linetype_manual(values=c("solid", "dotted", "dashed")) + 
+  scale_color_manual(values = c("blue", "black", "black")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend") +
+  ylab("count (difference, fraction)")+
+  xlab("time (days)") + 
+  ggtitle('Difference fraction in number of inferred cases from Richardson-Lucy') -> diff_percent_plot
+
+diff_percent_plot
+
+saveRDS(diff_percent_plot, sprintf("%s/difference-percent-cases-RL.Rds", intervention_file_name))
+ggsave(sprintf("%s/difference-percent-cases-RL.png", intervention_file_name))
+
+```
 ```{r}
 cori_df <- get_cori(df.in = sim_df, icol_name = "incidence")
 cori_inferred <- get_cori(df.in = inferred_df, icol_name = "new_inferred")
@@ -436,7 +469,7 @@ ggsave(sprintf("%s/rt_plot.png", intervention_file_name))
 
 ```{r}
 
-plot_grid(inferred_plot, diff_plot, new_all_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+plot_grid(inferred_plot, diff_percent_plot, new_all_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
 
 all_plot
 
