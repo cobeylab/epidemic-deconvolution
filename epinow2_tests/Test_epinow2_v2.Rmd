@@ -1,0 +1,301 @@
+---
+title: "Test EpiNow2"
+output: html_notebook
+---
+
+## Test EpiNow2 on SEIR synthetic data
+Katie Gostic
+26 June 2020
+
+
+
+## Install packages
+```{r}
+# install.packages("drat")
+# drat:::add("epiforecasts")
+# install.packages("EpiNow2")
+```
+
+## Load packages
+```{r}
+source('load_packages.R')
+```
+
+## Generate synthetic data
+```{r}
+source('01-make_SEIR_data.R')
+
+#Simulation parameters are specified in the variable - 
+parlist
+```
+
+
+## Visualize synthetic data
+```{r}
+get_sim_df() %>%
+    filter(time < 300) %>%
+ggplot() +
+  geom_line(aes(x = time, y = infections))+
+  geom_vline(aes(xintercept = parlist$change_starts[1]), lty = 2)+ ## Dahsed line where Rt starts to decrease
+  geom_vline(aes(xintercept = parlist$change_starts[2]), lty = 2)+
+  ggtitle('Epidemic curve') -> inc
+
+get_sim_df() %>% 
+  filter(time < 300) %>%
+  ggplot()+
+  geom_line(aes(x = time, y = true_rt)) +
+  geom_hline(aes(yintercept = 1), lty = 2)+
+  ylab(expression(paste(R[t])))+
+  ggtitle(expression(paste('Underlying ', R[t], ' values'))) -> R0
+
+cowplot::plot_grid(R0, inc,  nrow = 2)
+ggsave('figs/SEIR_sim.png', width = 5, height = 5, units = 'in', dpi = 300)
+```
+
+
+## Set parameters for input in to EpiNow2 inference
+```{r}
+testpars <- list(
+  last_obs_time = 150,  ## Last time to include in input time series (simulate right truncation)
+  output_folder = 'perfectly_specified', 
+  ## True delays
+  true_mean_case_delay = 5,
+  true_sd_case_delay = 1.7,
+  true_mean_death_delay = 15,
+  true_sd_death_delay = 1.5,
+  true_mean_inc = exp(EpiNow2::covid_incubation_period[1, ]$mean),
+  true_sd_inc = exp(EpiNow2::covid_incubation_period[1, ]$sd))
+## Delays specified in epinow2 priors
+testpars$input_mean_case_delay = testpars$true_mean_case_delay
+testpars$input_sd_case_delay = testpars$true_sd_case_delay
+testpars$input_mean_death_delay = testpars$true_mean_death_delay
+testpars$input_sd_death_delay = testpars$true_sd_death_delay
+testpars$input_mean_inc = testpars$true_mean_inc
+testpars$input_sd_inc = testpars$true_sd_inc
+testpars$input_mean_gi = parlist$true_mean_GI
+testpars$input_sd_gi = sqrt(parlist$true_var_GI)
+
+## If the output directory does not yet exist, create it.
+dir_check(testpars$output_folder)
+```
+
+
+## If aiming to input a perfectly specified generation interval, calculate the appropriate lognormal parameters 
+```{r}
+# The stan model assumes a lognormal GI. The true GI is gamma-distributed, so it can't really be perfectly specified. 
+# Fit the true GI to a lognormal for input into stan, which is the closest we can get to perfect specification
+if(testpars$input_mean_gi == parlist$true_mean_GI & testpars$input_sd_gi == sqrt(parlist$true_var_GI)){
+  # Draw samples from the true GI
+  gi_samples = rgamma(1000, get_shape(parlist$true_mean_GI, parlist$true_var_GI), get_rate(parlist$true_mean_GI, parlist$true_var_GI)) 
+  ## Fit the true generation time to a lognormal
+  lnormal_gi_pars <- optim(par = c(mm = log(8), sd = 1), fn = function(pars){
+    -sum(dlnorm(gi_samples, pars['mm'], pars['sd'], log = TRUE))
+  })
+testpars$input_mean_gi = exp(lnormal_gi_pars$par[1])
+testpars$input_sd_gi = exp(lnormal_gi_pars$par[2])
+}
+```
+
+
+## Set delay distributions for input into EpiNow2 -------------------------------------------
+```{r}
+generation_time <- list(mean = log(testpars$input_mean_gi),
+                        mean_sd = .5,
+                        sd = log(testpars$input_sd_gi),
+                        sd_sd = .5,
+                        max = 30)
+
+incubation_period <- list(mean = log(testpars$input_mean_inc),
+                          mean_sd = EpiNow2::covid_incubation_period[1, ]$mean_sd,
+                          sd = log(testpars$input_sd_inc),
+                          sd_sd = EpiNow2::covid_incubation_period[1, ]$sd_sd,
+                          max = 30)
+
+obs_rep_delay <- list(mean = log(testpars$input_mean_case_delay), ## assume mean of 5 days for outpatient testing 
+                      mean_sd = .5,   ## (48h from symptom onset + 48h for reporting + report the following day)
+                      sd = log(testpars$input_sd_case_delay),
+                      sd_sd = .5,
+                      max = 30)
+
+death_rep_delay <- list(mean = log(testpars$input_mean_death_delay), ## For death, assume a mean of 15 days from symptom onset and an sd of about 7d
+                        mean_sd = .5,
+                        sd = log(testpars$input_sd_death_delay),
+                        sd_sd = .5,
+                        max = 30)
+
+## Save inputs for reference in case running on cluster
+write_rds(testpars, sprintf('%s/testpars.rds', testpars$output_folder))
+write_rds(generation_time, sprintf('%s/gen_interval.rds', testpars$output_folder))
+write_rds(incubation_period, sprintf('%s/incubation_pd.rds', testpars$output_folder))
+write_rds(obs_rep_delay, sprintf('%s/case_delay.rds', testpars$output_folder))
+write_rds(death_rep_delay, sprintf('%s/death_delay.rds', testpars$output_folder))
+```
+
+
+
+# Plot the specified distributions
+```{r}
+#pdf(sprintf('%s/specified_distributions.pdf', testpars$output_folder))
+par(mfrow = c(2,2))
+xx = seq(0, 30, by = 0.01)
+
+plot(xx, dlnorm(xx, obs_rep_delay$mean, obs_rep_delay$sd), type = 'l', main = 'assumed delay from onset to case detection', xlab = 'days', ylab = 'dens')
+lines(xx, dlnorm(xx, log(testpars$true_mean_case_delay), log(testpars$true_sd_case_delay)), col = 'red', lty = 2)
+legend('topright', c('input', 'true'), col = c(1, 'red'), lty = c(1,2))
+
+plot(xx, dlnorm(xx, death_rep_delay$mean, death_rep_delay$sd), type = 'l', main = 'assumed delay from onset to death', xlab = 'days', ylab = 'dens')
+lines(xx, dlnorm(xx, log(testpars$true_mean_death_delay), log(testpars$true_sd_death_delay)), col = 'red', lty = 2)
+legend('topright', c('input', 'true'), col = c(1, 'red'), lty = c(1,2))
+
+plot(xx, dlnorm(xx, generation_time$mean, generation_time$sd), type = 'l', main = 'assumed generation time', xlab = 'days', ylab = 'dens')
+lines(xx, 
+      dgamma(xx, get_shape(parlist$true_mean_GI, parlist$true_var_GI), 
+             get_rate(parlist$true_mean_GI, parlist$true_var_GI)), 
+      col = 'red', lty = 2)
+legend('topright', c('input', 'true'), col = c(1, 'red'), lty = c(1,2))
+
+plot(xx, dlnorm(xx, incubation_period$mean, incubation_period$sd), type = 'l', main = 'assumed incubation time', xlab = 'days', ylab = 'dens')
+lines(xx, dlnorm(xx, log(testpars$true_mean_inc), log(testpars$true_sd_inc)), col = 'red', lty = 2)
+legend('topright', c('input', 'true'), col = c(1, 'red'), lty = c(1,2))
+#dev.off()
+```
+True vs. input distributions. Note that everything is perfectly specified except the generation interval. We can't perfectly specify the generation interval because the SEIR simulation isn't compatible with lognormal waiting times.
+
+
+
+
+
+## Generate synthetic observations from synthetic incidence  -------------------------------------------
+```{r}
+# Define functions to draw n samples from each delay distribution
+r_inc_dist <- function(n){rlnorm(n, meanlog = incubation_period$mean, sdlog = incubation_period$sd)} 
+
+outpatient_delay_dist <- function(nn, inc_dist = r_inc_dist){
+  r_sym_to_obs_dist <- function(n){rlnorm(n, obs_rep_delay$mean, obs_rep_delay$sd)}
+  inc_dist(nn) + r_sym_to_obs_dist(nn)
+}
+
+death_delay_dist <- function(nn, inc_dist = r_inc_dist){
+  r_sym_to_obs_dist <- function(n){rlnorm(n, death_rep_delay$mean, death_rep_delay$sd)} # Additional delay from symptoms -> observation
+  inc_dist(nn) + r_sym_to_obs_dist(nn)
+}
+
+source('inf_to_obs.R')
+## Wrapper function to get synthetic data in a data frame that includes times of observation
+get_obs_ts <- function(mt = NULL){ # "Max time" - time at which to end the time series of observations
+  if(length(mt) == 0){mt = max(get_sim_df()$time)}
+  ## Sample from delays to get times of observation
+  get_sim_df() %>%
+    merge(
+      get_tObs_from_tInf(get_sim_df()$incidence, 
+                         get_sim_df()$time, 
+                         outpatient_delay_dist, 
+                         return_times = T),
+      by = 'time', all = TRUE) %>% rename(obs_outpatient = n) %>%
+    merge(
+      get_tObs_from_tInf(get_sim_df()$incidence, 
+                         get_sim_df()$time, 
+                         death_delay_dist, 
+                         return_times = T),
+      by = 'time', all = TRUE) %>% rename(obs_deaths = n) %>%
+    as.tbl() -> obs_df
+  
+  ## Truncate at time mt
+  obs_df <- obs_df %>% filter(time <= mt)
+  return(obs_df)
+}
+
+## Generate synthetic times of observation up to t = 150
+obs_df <- get_obs_ts(150) %>%
+  mutate(date = Sys.Date()-rev(time)) ## Add calendar dates for input into epinow
+
+## Plot
+obs_df %>%
+  select(time, incidence, contains('obs')) %>%
+  pivot_longer(-time, names_to = 'data_type', values_to = 'count') %>%
+  mutate(is_imputed = ifelse(!grepl(pattern = 'obs', x = data_type), 'observed', 'underlying'),
+         data_type = factor(data_type, 
+                            levels = c('incidence', 'obs_outpatient', 'imputed_hospital', 'obs_deaths'),
+                            labels = c('latent (true) infections\nlater observed as...', 'cases', 'hospital admissions', 'deaths'))) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, lty = is_imputed)) +
+  ggtitle('Synthetic Data') +
+  scale_color_viridis_d(direction = -1)+
+  guides(color = 'none')+
+  theme(legend.position = 'bottom')+
+  labs(color = '', linetype = 'Type') -> obs
+obs + guides(color = 'legend') + theme(legend.position = 'right') -> synthetic_obs
+ggsave2(sprintf('%s/synthetic_obs.png', testpars$output_folder), plot = synthetic_obs, width = 7, height = 5, units = 'in', dpi = 300)
+```
+
+```{r}
+synthetic_obs
+```
+
+## Input into inference model  -------------------------------------------
+```{r}
+## Write a wrapper to reformat the desired synthetic data for input into epiEstim
+get_in_dat <- function(obs_colname, odf = obs_df){
+  odf[,c('date', obs_colname)] %>%
+    setnames(c('date', 'confirm')) %>%
+    as.data.table() %>%
+    return()
+}
+```
+
+```{r}
+## Fit to synthetic case observations
+est_from_cases <- EpiNow2::epinow(reported_cases = get_in_dat('obs_outpatient'), 
+                                  generation_time = generation_time,  ## Generation time priors
+                                  incubation_period = incubation_period, ## Incubation priors
+                                  reporting_delay = obs_rep_delay, ## Reporting delay priors
+                                  rt_prior = list(mean = 1, sd = 1), horizon = 7,
+                                  samples = 2000, warmup = 500, cores = 4,
+                                  chains = 4, verbose = TRUE,
+                                  target_folder = paste0(testpars$output_folder, '/cases'))
+```
+
+```{r}
+# ## Still running this...
+# est_from_deaths <- EpiNow2::epinow(reported_cases = get_in_dat('obs_deaths'), 
+#                                    generation_time = generation_time,  ## Generation time priors
+#                                    incubation_period = incubation_period, ## Incubation priors
+#                                    reporting_delay = death_rep_delay, ## Reporting dealy priors
+#                                    rt_prior = list(mean = 1, sd = 1), horizon = 7,
+#                                    samples = 2000, warmup = 500, cores = 4,
+#                                    chains = 4, verbose = TRUE,
+#                                    target_folder = paste0(testpars$output_folder, '/deaths'))
+```
+
+
+```{r}
+source('plotfuns.R')
+make_plots(path = 'perfectly_specified', delay_type = 'cases')
+#make_plots(path = 'perfectly_specified', delay_type = 'death')
+```
+
+
+## Visualize results
+![**Comparison of true and estimated Rt** Estimates are substantially closer to 1 than the truth.](figs/rt-perfectly_specified-cases.png)
+
+![**Comparison of true and estimated Rt** EpiNow2 plot.](perfectly_specified/cases/latest/reff_plot.png)
+
+![**Inferred infection time series is not quite where it should be**](figs/infections-perfectly_specified-cases.png)
+
+![**Prior vs posterior vs truth for all key distributions**](figs/priors_vs_post-perfectly_specified-case.png)
+
+
+
+
+## KG - Overall summary.
+
+The EpiNow2 model is doing okay, but it's estimating Rt values substantially closer to 1 than they should be. I'm concerned this may be due to the heavy right tail of the lognormal generation interval distribution in the stan model, relative to the true gamma-distributed generation interval.
+
+* In the SEIR sim, the generation interval is distributed exactly gamma(shape = 2, scale = 4). This distribution arises as the sum of iid residence times in compartments E and I. In other words, the sum of two exponential random variables, each with rate 1/4 follows a gamma with shape 2 and scale 4.
+* Because the true generation interval distribution is distributed gamma, whereas the stan model assumes it follows a lognormal distribution, we can't specify the generation interval perfectly on input into the model. Instead, I'm doing the next best thing, which is to fit a lognormal distribution to a synthetic dataset drawn from the true distribution. As you can see in the figure above, which compares true and specified distributions, this approximates the GI ok, but the input distribution has a heavier tail than the true distribution.
+
+I'm concerned the too-low Rt estimates are occurring because of the heavy tail of the lognormal distribution. In my tests, if you specify the mean generation interval correctly, but the variance is too high, you underestimate Rt. Following logic laid out in Wallinga and Lipsitch, 2007, this occurs because when the GI variance is higher than it should be, the rate of epidemic growth r is higher than it should be relative to the reproductive number R. The model may be compensating by estimating lower R values to match the observed growth rate, r.
+
+Quoting from Wallinga and Lipsitch, 2007:
+
+"If half of the cases will produce secondary infections a bit earlier than the average generation interval Tc and the other half will produce secondary infections a bit later than average, the additional number of secondary and tertiary cases which are due to the faster infection will more than compensate for the postponed cases that result from the slower infection. Therefore, epidemics with some variation in the duration of their generation intervals will increase at a higher growth rate r for a given reproductive number R than epidemics without any variation in generation interval"
