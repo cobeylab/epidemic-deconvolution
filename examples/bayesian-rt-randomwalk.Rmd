@@ -194,7 +194,7 @@ result_df <- sim_df %>%
 ggplot(result_df) +
   geom_ribbon(aes(x = time, ymin = rt_025, ymax = rt_975), fill = 'lightgray') +
   geom_line(aes(x = time, y = rt)) +
-  geom_line(aes(x = time, y = rt_mean))
+  geom_line(aes(x = time, y = rt_mean), color = 'red')
 ```
 
 Also pretty good.
