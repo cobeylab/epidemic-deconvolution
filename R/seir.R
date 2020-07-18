@@ -1,6 +1,6 @@
 #' Simulate a SEIR model, deterministic or stochastic.
 #' 
-#' Ed Baskerville and Timothy M Pollington
+#' written by Ed Baskerville, reviewed/edited by Timothy M Pollington
 #' 18 July 2020 (v2)
 #' 
 #' No age structure.
@@ -18,7 +18,7 @@
 #' @param t_I Mean duration of infectiousness.
 #' 
 #' @return A dataframe containing `time`, all compartments
-#' (`S`, `E`, `I`, `R`), and transition counts (`dS`, `dEI`, `dIR`).
+#' (`S`, `E`, `I`, `R`), and transition counts (`dSE`, `dEI`, `dIR`).
 simulate_seir <- function(
   arnaught, t_E, t_I,
   N, S_init, E_init, I_init,
@@ -52,6 +52,7 @@ simulate_seir_stochastic <- function(
   
   # Draws a binomial based on a rate
   draw <- function(n, rate) {
+    stopifnot(rate >= 0)
     p <- 1 - exp(-rate * delta_t)
     rbinom(1, n, p)
   }
@@ -61,17 +62,17 @@ simulate_seir_stochastic <- function(
   
   # Step forward from t to t + delta_t
   step <- function(t, S_prev, E_prev, I_prev) {
-    dS <- draw(S_prev, beta(t) * I_prev / N)
+    dSE <- draw(S_prev, beta(t) * I_prev / N)
     dIR <- draw(I_prev, 1 / t_I)
     
     if(t_E > 0) {
       # SEIR model
       dEI <- draw(E_prev, 1 / t_E)
       list(
-        S = S_prev - dS,
-        E = E_prev + dS - dEI,
+        S = S_prev - dSE,
+        E = E_prev + dSE - dEI,
         I = I_prev + dEI - dIR,
-        dS = dS,
+        dSE = dSE,
         dEI = dEI,
         dIR = dIR
       )
@@ -79,11 +80,11 @@ simulate_seir_stochastic <- function(
     else {
       # SIR model
       list(
-        S = S_prev - dS,
+        S = S_prev - dSE,
         E = 0,
-        I = I_prev + dS - dIR,
-        dS = dS,
-        dEI = dS,
+        I = I_prev + dSE - dIR,
+        dSE = dSE,
+        dEI = 0,
         dIR = dIR
       )
     }
@@ -92,7 +93,6 @@ simulate_seir_stochastic <- function(
   # Set up state vectors over time
   S <- numeric(n_t + 1)
   S[1] <- S_init
-  
   E <- numeric(n_t + 1)
   I <- numeric(n_t + 1)
   if(t_E > 0) {
@@ -107,7 +107,7 @@ simulate_seir_stochastic <- function(
   }
   
   # Track transitions over time
-  dS <- rep(NA, n_t + 1)
+  dSE <- rep(NA, n_t + 1)
   dEI <- rep(NA, n_t + 1)
   dIR <- rep(NA, n_t + 1)
   
@@ -117,7 +117,7 @@ simulate_seir_stochastic <- function(
     E_prev <- E[i]
     I_prev <- I[i]
     
-    dS[i+1] <- 0
+    dSE[i+1] <- 0
     dEI[i+1] <- 0
     dIR[i+1] <- 0
     for(j in 1:n_steps_per_t) {
@@ -125,7 +125,7 @@ simulate_seir_stochastic <- function(
       S_prev <- state_next$S
       E_prev <- state_next$E
       I_prev <- state_next$I
-      dS[i+1] <- dS[i+1] + state_next$dS
+      dSE[i+1] <- dSE[i+1] + state_next$dSE
       dEI[i+1] <- dEI[i+1] + state_next$dEI
       dIR[i+1] <- dIR[i+1] + state_next$dIR
     }
@@ -142,7 +142,7 @@ simulate_seir_stochastic <- function(
     E = E,
     I = I,
     R = N - S - E - I,
-    dS = dS,
+    dSE = dSE,
     dEI = dEI,
     dIR = dIR
   )
@@ -162,30 +162,30 @@ simulate_seir_ode <- function(
   
   beta <- construct_beta(arnaught, t_I, n_t)
   d_dt <- function(t, y, params) {
-    dS <- y['S'] * beta(t) * y['I'] / N
+    dSE <- y['S'] * beta(t) * y['I'] / N
     dIR <- y['I'] / t_I
     
     if(t_E > 0) {
       # SEIR model
       dEI <- y['E'] / t_E
       list(c(
-        S = -dS,
-        E = dS - dEI,
+        S = -dSE,
+        E = dSE - dEI,
         I = dEI - dIR,
         R = dIR,
-        cum_dS = dS,
+        cum_dSE = dSE,
         cum_dEI = dEI
       ), NULL)
     }
     else {
       # SIR model
       list(c(
-        S = -dS,
+        S = -dSE,
         E = 0,
-        I = dS - dIR,
+        I = dSE - dIR,
         R = dIR,
-        cum_dS = dS,
-        cum_dEI = dS
+        cum_dSE = dSE,
+        cum_dEI = dSE
       ), NULL)
     }
   }
@@ -195,11 +195,11 @@ simulate_seir_ode <- function(
     E = if(t_E > 0) E_init else 0,
     I = if(t_E > 0) I_init else E_init + I_init,
     R = 0,
-    cum_dS = 0,
+    cum_dSE = 0,
     cum_dEI = 0
   )
   as.data.frame(ode(y_init, 0:n_t, d_dt, NULL)) %>%
-    mutate(dS = cum_dS - lag(cum_dS, 1)) %>%
+    mutate(dSE = cum_dSE - lag(cum_dSE, 1)) %>%
     mutate(dEI = cum_dEI - lag(cum_dEI, 1)) %>%
     mutate(dIR = R - lag(R, 1))
 }
