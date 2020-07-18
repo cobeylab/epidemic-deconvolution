@@ -154,8 +154,6 @@ simulate_seir_ode <- function(
   n_t,
   n_steps_per_t = 1 # Ignored; included so the function signature matches stochastic version
 ) {
-  library(deSolve)
-  
   check_args(
     arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
   )
@@ -198,7 +196,7 @@ simulate_seir_ode <- function(
     cum_dSE = 0,
     cum_dEI = 0
   )
-  as.data.frame(ode(y_init, 0:n_t, d_dt, NULL)) %>%
+  as.data.frame(deSolve::ode(y_init, 0:n_t, d_dt, NULL)) %>%
     mutate(dSE = cum_dSE - lag(cum_dSE, 1)) %>%
     mutate(dEI = cum_dEI - lag(cum_dEI, 1)) %>%
     mutate(dIR = R - lag(R, 1))
