@@ -217,14 +217,14 @@ check_args <- function(
   arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   # Check all input parameters
-  stopifnot(length(S_init) == 1 && S_init > 0 && is.integer(S_init))
-  stopifnot(length(E_init) == 1 && E_init >= 0 && is.integer(E_init))
-  stopifnot(length(I_init) == 1 && I_init >= 0 && is.integer(I_init))
-  stopifnot(length(N) == 1 && N >= 1 && is.integer(N))
-  stopifnot(length(n_t) == 1 && n_t >= 1 && is.integer(n_t))
+  stopifnot(length(S_init) == 1 && S_init > 0 && round(S_init) == S_init)
+  stopifnot(length(E_init) == 1 && E_init >= 0 && round(E_init) == E_init)
+  stopifnot(length(I_init) == 1 && I_init >= 0 && round(I_init) == I_init)
+  stopifnot(length(N) == 1 && N >= 1 && round(N) == N)
+  stopifnot(length(n_t) == 1 && n_t >= 1 && round(n_t) == n_t)
   stopifnot(
     length(n_steps_per_t) == 1 && n_steps_per_t >= 1 &&
-    is.integer(n_steps_per_t)
+    round(n_steps_per_t) == n_steps_per_t
   )
   stopifnot(
     is.numeric(arnaught) && arnaught > 0 &&
