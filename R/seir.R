@@ -1,7 +1,7 @@
 #' Simulate a SEIR model, deterministic or stochastic.
 #' 
-#' Ed Baskerville
-#' 15 April 2020 (initial version)
+#' Ed Baskerville and Timothy M Pollington
+#' 18 July 2020 (v2)
 #' 
 #' No age structure.
 #' 
@@ -219,11 +219,14 @@ check_args <- function(
   arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   # Check all input parameters
-  stopifnot(length(N) == 1 && N >= 1 && N == round(N))
-  stopifnot(length(n_t) == 1 && n_t >= 1 && n_t == round(n_t))
+  stopifnot(length(S_init) == 1 && S_init > 0 && is.integer(S_init))
+  stopifnot(length(E_init) == 1 && E_init >= 0 && is.integer(E_init))
+  stopifnot(length(I_init) == 1 && I_init >= 0 && is.integer(I_init))
+  stopifnot(length(N) == 1 && N >= 1 && is.integer(N))
+  stopifnot(length(n_t) == 1 && n_t >= 1 && is.integer(n_t))
   stopifnot(
     length(n_steps_per_t) == 1 && n_steps_per_t >= 1 &&
-    n_steps_per_t == round(n_steps_per_t)
+    is.integer(n_steps_per_t)
   )
   stopifnot(
     is.numeric(arnaught) && arnaught > 0 &&
