@@ -18,7 +18,7 @@
 #' @param t_I Mean duration of infectiousness.
 #' 
 #' @return A dataframe containing `time`, all compartments
-#' (`S`, `E`, `I`, `R`), and transition counts (`dSE`, `dEI`, `dIR`).
+#' (`S`, `E`, `I`, `R`), and transition counts (`dS`, `dEI`, `dIR`).
 simulate_seir <- function(
   arnaught, t_E, t_I,
   N, S_init, E_init, I_init,
@@ -62,17 +62,17 @@ simulate_seir_stochastic <- function(
   
   # Step forward from t to t + delta_t
   step <- function(t, S_prev, E_prev, I_prev) {
-    dSE <- draw(S_prev, beta(t) * I_prev / N)
+    dS <- draw(S_prev, beta(t) * I_prev / N)
     dIR <- draw(I_prev, 1 / t_I)
     
     if(t_E > 0) {
       # SEIR model
       dEI <- draw(E_prev, 1 / t_E)
       list(
-        S = S_prev - dSE,
-        E = E_prev + dSE - dEI,
+        S = S_prev - dS,
+        E = E_prev + dS - dEI,
         I = I_prev + dEI - dIR,
-        dSE = dSE,
+        dS = dS,
         dEI = dEI,
         dIR = dIR
       )
@@ -80,10 +80,10 @@ simulate_seir_stochastic <- function(
     else {
       # SIR model
       list(
-        S = S_prev - dSE,
+        S = S_prev - dS,
         E = 0,
-        I = I_prev + dSE - dIR,
-        dSE = dSE,
+        I = I_prev + dS - dIR,
+        dS = dS,
         dEI = 0,
         dIR = dIR
       )
@@ -107,7 +107,7 @@ simulate_seir_stochastic <- function(
   }
   
   # Track transitions over time
-  dSE <- rep(NA, n_t + 1)
+  dS <- rep(NA, n_t + 1)
   dEI <- rep(NA, n_t + 1)
   dIR <- rep(NA, n_t + 1)
   
@@ -117,7 +117,7 @@ simulate_seir_stochastic <- function(
     E_prev <- E[i]
     I_prev <- I[i]
     
-    dSE[i+1] <- 0
+    dS[i+1] <- 0
     dEI[i+1] <- 0
     dIR[i+1] <- 0
     for(j in 1:n_steps_per_t) {
@@ -125,7 +125,7 @@ simulate_seir_stochastic <- function(
       S_prev <- state_next$S
       E_prev <- state_next$E
       I_prev <- state_next$I
-      dSE[i+1] <- dSE[i+1] + state_next$dSE
+      dS[i+1] <- dS[i+1] + state_next$dS
       dEI[i+1] <- dEI[i+1] + state_next$dEI
       dIR[i+1] <- dIR[i+1] + state_next$dIR
     }
@@ -142,7 +142,7 @@ simulate_seir_stochastic <- function(
     E = E,
     I = I,
     R = N - S - E - I,
-    dSE = dSE,
+    dS = dS,
     dEI = dEI,
     dIR = dIR
   )
@@ -160,30 +160,30 @@ simulate_seir_ode <- function(
   
   beta <- construct_beta(arnaught, t_I, n_t)
   d_dt <- function(t, y, params) {
-    dSE <- y['S'] * beta(t) * y['I'] / N
+    dS <- y['S'] * beta(t) * y['I'] / N
     dIR <- y['I'] / t_I
     
     if(t_E > 0) {
       # SEIR model
       dEI <- y['E'] / t_E
       list(c(
-        S = -dSE,
-        E = dSE - dEI,
+        S = -dS,
+        E = dS - dEI,
         I = dEI - dIR,
         R = dIR,
-        cum_dSE = dSE,
+        cum_dS = dS,
         cum_dEI = dEI
       ), NULL)
     }
     else {
       # SIR model
       list(c(
-        S = -dSE,
+        S = -dS,
         E = 0,
-        I = dSE - dIR,
+        I = dS - dIR,
         R = dIR,
-        cum_dSE = dSE,
-        cum_dEI = dSE
+        cum_dS = dS,
+        cum_dEI = dS
       ), NULL)
     }
   }
@@ -193,11 +193,11 @@ simulate_seir_ode <- function(
     E = if(t_E > 0) E_init else 0,
     I = if(t_E > 0) I_init else E_init + I_init,
     R = 0,
-    cum_dSE = 0,
+    cum_dS = 0,
     cum_dEI = 0
   )
   as.data.frame(deSolve::ode(y_init, 0:n_t, d_dt, NULL)) %>%
-    mutate(dSE = cum_dSE - lag(cum_dSE, 1)) %>%
+    mutate(dS = cum_dS - lag(cum_dS, 1)) %>%
     mutate(dEI = cum_dEI - lag(cum_dEI, 1)) %>%
     mutate(dIR = R - lag(R, 1))
 }
