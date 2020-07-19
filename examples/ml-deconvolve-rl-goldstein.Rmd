@@ -17,16 +17,17 @@ Therefore, I don't recommend using it.
 
 ## Preamble
 
-```{r}
+```{r preamble}
 library(ggplot2)
 library(dplyr)
 library(rstan)
+set.seed(1984)
 ```
 
 
 ## Simulate stochastic SEIR
 
-```{r}
+```{r simulate stochastic SEIR}
 source('../R/seir.R')
 sim_df <- {
   N <- 1e5
@@ -46,28 +47,25 @@ sim_df <- {
   ) %>% filter(time > 0)
 }
 
-ggplot(sim_df, aes(x = time, y = dS)) +
-  geom_col()
+ggplot(sim_df, aes(x = time, y = dS)) + geom_col()
 ```
 
 ## Make a delay distribution from a discretized gamma
 
-```{r}
+```{r make delay distrib.}
 delay_dist <- {
   t <- seq(0, 39)
-  p_unnorm <- pgamma(t + 1, shape = 2.5, rate = 0.25) - pgamma(t, shape = 2.5, rate = 0.25)
-  
+  p_unnorm <- pgamma(t + 1, shape = 2.5, rate = 0.25) - 
+    pgamma(t, shape = 2.5, rate = 0.25)
   data.frame(delay = t, pmf = p_unnorm / sum(p_unnorm))
 }
 
-ggplot(delay_dist, aes(x = delay, y = pmf)) +
-  geom_col()
-  
+ggplot(delay_dist, aes(x = delay, y = pmf)) + geom_col()
 ```
 
 ## Delay incidence curve (dS) and make some right-censored, noisy observations
 
-```{r}
+```{r convolve}
 source('../R/convolve_delay.R')
 p_obs <- 0.5
 obs_df <- {
@@ -83,7 +81,7 @@ ggplot(obs_df, aes(x = time, y = y)) +
 
 Despite inefficient implementation, this just takes a second:
 
-```{r}
+```{r deconvolve}
 source('../R/deconvolve.R')
 result <- deconvolve_rltype_goldsteinetal(
   t_obs_min = obs_df$time[1],
@@ -95,7 +93,7 @@ result <- deconvolve_rltype_goldsteinetal(
   n_iterations_max = 100,
   n_iterations = NULL
 )
-result$chi_squared
+result$chi_square
 result$n_iterations
 ```
 
@@ -107,7 +105,7 @@ Legend:
 * Solid black line: original signal multiplied by observation probability
 * Solid red line: inferred signal
 
-```{r}
+```{r plot}
 result_df <- sim_df %>%
   left_join(
     tibble(
@@ -128,7 +126,7 @@ This looks pretty good, but the values in the right-censored region are very uns
 In fact, everything is very unstable in terms of initial conditions.
 Redoing everything with initial conditions bootstrap-sampled from the observed time series gives a strange result:
 
-```{r}
+```{r strange things are happening to me}
 {
   source('../R/deconvolve.R')
   result <- deconvolve_rltype_goldsteinetal(
@@ -142,7 +140,7 @@ Redoing everything with initial conditions bootstrap-sampled from the observed t
     n_iterations = NULL,
     x_unobs_init = sample(obs_df$y, nrow(sim_df), replace = TRUE)
   )
-  result$chi_squared
+  result$chi_square
   result$n_iterations
   
   result_df <- sim_df %>%
