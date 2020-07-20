@@ -6,7 +6,7 @@ output: html_notebook
 NB: This code is NOT RECOMMENDED for use without extreme caution.
 
 This notebook simulates a stochastic SEIR, convolves it with a discretized
-gamma distribution, makes noisy observations, and infers the undelayed signal
+Gamma distribution, makes noisy observations, and infers the undelayed signal
 using the correct delay distribution.
 
 This notebook uses an implementation of the Richardson-Lucy-type deconvolution
@@ -50,7 +50,7 @@ sim_df <- {
 ggplot(sim_df, aes(x = time, y = dS)) + geom_col()
 ```
 
-## Make a delay distribution from a discretized gamma
+## Make a delay distribution from a discretized Gamma
 
 ```{r make delay distrib.}
 delay_dist <- {
@@ -102,7 +102,9 @@ result$n_iterations
 Legend:
 
 * Dotted black line: observed data
+
 * Solid black line: original signal multiplied by observation probability
+
 * Solid red line: inferred signal
 
 ```{r plot}
@@ -124,7 +126,7 @@ ggplot(result_df) +
 This looks pretty good, but the values in the right-censored region are very unstable in terms of initial conditions.
 
 In fact, everything is very unstable in terms of initial conditions.
-Redoing everything with initial conditions bootstrap-sampled from the observed time series gives a strange result:
+Redoing everything with initial conditions bootstrap-sampled from the observed time series gives a strange result. Of note is that `result$y_expected[1:2]` have expected frequencies less than 5 which is not recommended when applying the chi-square statistic. However this is not the cause of the problem as if the 𝛘2 stopping criterion is dropped by choosing `n_iterations = n_iterations_max = 10000` say, then it still happens. It seems that however high the iterations are, the iterated result does not settle down a smooth curve shape:
 
 ```{r strange things are happening to me}
 {
@@ -158,3 +160,53 @@ Redoing everything with initial conditions bootstrap-sampled from the observed t
     geom_line(data = obs_df, mapping = aes(x = time, y = y), lty = 2)
 }
 ```
+
+However it might be a bit pessimistic to assume the initially observed curve `x_unobs_init` is a sample without replacement from the original observed curve. After all there is no discernible shape to the former curve (see solid red line below); such a lack of shape/noise in observed epidemiological data is never likely to be observed. Also since the Richardson-Lucy algorithm has its foundations in deblurring images, it'd be asking a lot to return an image/structure from what is essentially white noise. However this example is of value as it demonstrates the need to plot the output (as seen in the graph above), and the user should then assess the graph and decide if the smoothness of the inferred curve about its rising and falling trend is realistic.
+
+* solid black line: original observed line
+
+* solid red line: extreme sample without replacement
+
+* dashed black line: original observed line with Normal noise with sd 5% of est.
+
+```{r plot initial conditions}
+plot(obs_df, type = "l", lwd = 2)
+lines(sample(obs_df$y, nrow(sim_df), replace = TRUE), lwd = 2, col = "red")
+lines(truncnorm::rtruncnorm(length(obs_df$y), a = 0, b = Inf, mean = obs_df$y, sd = 0.05*obs_df$y), lwd = 2, lty = 2)
+```
+
+```{r initial conds with Normal noise}
+{
+  source('../R/deconvolve.R')
+  result <- deconvolve_rltype_goldsteinetal(
+    t_obs_min = obs_df$time[1],
+    y_obs = obs_df$y,
+    delay_min = delay_dist$delay[1],
+    pmf_delay = delay_dist$pmf,
+    t_unobs_min = sim_df$time[1],
+    n_unobs = nrow(sim_df),
+    n_iterations_max = 100,
+    n_iterations = NULL,
+    x_unobs_init = truncnorm::rtruncnorm(length(obs_df$y), a = 0, b = Inf, 
+                                         mean = obs_df$y, sd = 50)
+  )
+  result$chi_square
+  result$n_iterations
+  
+  result_df <- sim_df %>%
+    left_join(
+      tibble(
+        time = 1:nrow(sim_df),
+        xhat = result$x_unobs
+      ),
+      by = 'time'
+    )
+  
+  ggplot(result_df) +
+    geom_line(aes(x = time, y = p_obs * dS)) +
+    geom_line(aes(x = time, y = xhat), color = 'red') +
+    geom_line(data = obs_df, mapping = aes(x = time, y = y), lty = 2)
+}
+```
+
+This time the inferred curve is not as bad as previously observed though the first 15d isn't a great fit. Inspired by the Becker backprojection method that can use a kernel smoothing step 'S' as part of its EMS (expectation-maximisation-smoothing) algorithm this may remedy this effect (see Yip et al 10.1080/03610910701792562  p428). The right-truncation effect can be remedied by ignoring an amount of time at the end equivalent at least to the mean delay, as done by Yip et al (p428) for the Becker backprojection algorithm.
