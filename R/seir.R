@@ -1,6 +1,6 @@
 #' Simulate a SEIR model, deterministic or stochastic.
 #' 
-#' written by Ed Baskerville, reviewed/edited by Timothy M Pollington
+#' written by Ed Baskerville, slightly edited by Timothy M Pollington
 #' 18 July 2020 (v2)
 #' 
 #' No age structure.
@@ -19,13 +19,11 @@
 #' 
 #' @return A dataframe containing `time`, all compartments
 #' (`S`, `E`, `I`, `R`), and transition counts (`dS`, `dEI`, `dIR`).
-simulate_seir <- function(
-  arnaught, t_E, t_I,
-  N, S_init, E_init, I_init,
-  n_t, n_steps_per_t = 1,
-  method = 'stochastic'
+sim_seir <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init,
+  n_t, n_steps_per_t = 1, method = 'stochastic'
 ) {
-  func <- if(method == 'stochastic') simulate_seir_stochastic else simulate_seir_ode
+  func <- if(method == 'stochastic') sim_seir_stochastic else sim_seir_ode
   func(
     arnaught, t_E, t_I,
     N, S_init, E_init, I_init,
@@ -33,16 +31,8 @@ simulate_seir <- function(
   )
 }
 
-simulate_seir_stochastic <- function(
-  arnaught, 
-  t_E, 
-  t_I,
-  N, 
-  S_init, 
-  E_init, 
-  I_init,
-  n_t, 
-  n_steps_per_t
+sim_seir_stochastic <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   check_args(
     arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
@@ -148,11 +138,10 @@ simulate_seir_stochastic <- function(
   )
 }
 
-simulate_seir_ode <- function(
-  arnaught, t_E, t_I,
-  N, S_init, E_init, I_init,
+sim_seir_ode <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init,
   n_t,
-  n_steps_per_t = 1 # Ignored; included so the function signature matches stochastic version
+  n_steps_per_t = 1 # Ignored; added so function signature matches stochastic
 ) {
   check_args(
     arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
