@@ -1,7 +1,7 @@
 #' Simulate a SEIR model, deterministic or stochastic.
 #' 
-#' Ed Baskerville
-#' 15 April 2020 (initial version)
+#' written by Ed Baskerville, slightly edited by Timothy M Pollington
+#' 18 July 2020 (v2)
 #' 
 #' No age structure.
 #' 
@@ -19,13 +19,11 @@
 #' 
 #' @return A dataframe containing `time`, all compartments
 #' (`S`, `E`, `I`, `R`), and transition counts (`dS`, `dEI`, `dIR`).
-simulate_seir <- function(
-  arnaught, t_E, t_I,
-  N, S_init, E_init, I_init,
-  n_t, n_steps_per_t = 1,
-  method = 'stochastic'
+sim_seir <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init,
+  n_t, n_steps_per_t = 1, method = 'stochastic'
 ) {
-  func <- if(method == 'stochastic') simulate_seir_stochastic else simulate_seir_ode
+  func <- if(method == 'stochastic') sim_seir_stochastic else sim_seir_ode
   func(
     arnaught, t_E, t_I,
     N, S_init, E_init, I_init,
@@ -33,16 +31,8 @@ simulate_seir <- function(
   )
 }
 
-simulate_seir_stochastic <- function(
-  arnaught, 
-  t_E, 
-  t_I,
-  N, 
-  S_init, 
-  E_init, 
-  I_init,
-  n_t, 
-  n_steps_per_t
+sim_seir_stochastic <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   check_args(
     arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
@@ -52,6 +42,7 @@ simulate_seir_stochastic <- function(
   
   # Draws a binomial based on a rate
   draw <- function(n, rate) {
+    stopifnot(rate >= 0)
     p <- 1 - exp(-rate * delta_t)
     rbinom(1, n, p)
   }
@@ -83,7 +74,7 @@ simulate_seir_stochastic <- function(
         E = 0,
         I = I_prev + dS - dIR,
         dS = dS,
-        dEI = dS,
+        dEI = 0,
         dIR = dIR
       )
     }
@@ -92,7 +83,6 @@ simulate_seir_stochastic <- function(
   # Set up state vectors over time
   S <- numeric(n_t + 1)
   S[1] <- S_init
-  
   E <- numeric(n_t + 1)
   I <- numeric(n_t + 1)
   if(t_E > 0) {
@@ -148,14 +138,11 @@ simulate_seir_stochastic <- function(
   )
 }
 
-simulate_seir_ode <- function(
-  arnaught, t_E, t_I,
-  N, S_init, E_init, I_init,
+sim_seir_ode <- function(
+  arnaught, t_E, t_I, N, S_init, E_init, I_init,
   n_t,
-  n_steps_per_t = 1 # Ignored; included so the function signature matches stochastic version
+  n_steps_per_t = 1 # Ignored; added so function signature matches stochastic
 ) {
-  library(deSolve)
-  
   check_args(
     arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
   )
@@ -198,7 +185,7 @@ simulate_seir_ode <- function(
     cum_dS = 0,
     cum_dEI = 0
   )
-  as.data.frame(ode(y_init, 0:n_t, d_dt, NULL)) %>%
+  as.data.frame(deSolve::ode(y_init, 0:n_t, d_dt, NULL)) %>%
     mutate(dS = cum_dS - lag(cum_dS, 1)) %>%
     mutate(dEI = cum_dEI - lag(cum_dEI, 1)) %>%
     mutate(dIR = R - lag(R, 1))
@@ -219,11 +206,14 @@ check_args <- function(
   arnaught, t_E, t_I, N, S_init, E_init, I_init, n_t, n_steps_per_t
 ) {
   # Check all input parameters
-  stopifnot(length(N) == 1 && N >= 1 && N == round(N))
-  stopifnot(length(n_t) == 1 && n_t >= 1 && n_t == round(n_t))
+  stopifnot(length(S_init) == 1 && S_init > 0 && round(S_init) == S_init)
+  stopifnot(length(E_init) == 1 && E_init >= 0 && round(E_init) == E_init)
+  stopifnot(length(I_init) == 1 && I_init >= 0 && round(I_init) == I_init)
+  stopifnot(length(N) == 1 && N >= 1 && round(N) == N)
+  stopifnot(length(n_t) == 1 && n_t >= 1 && round(n_t) == n_t)
   stopifnot(
     length(n_steps_per_t) == 1 && n_steps_per_t >= 1 &&
-    n_steps_per_t == round(n_steps_per_t)
+    round(n_steps_per_t) == n_steps_per_t
   )
   stopifnot(
     is.numeric(arnaught) && arnaught > 0 &&
