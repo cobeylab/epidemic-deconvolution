@@ -1,6 +1,6 @@
 # Example code for deconvolving epidemic curves
 
-Ed Baskerville, Timothy M Pollington & Katie Gostic<br>
+Ed Baskerville, Lauren McGough, Timothy M Pollington & Katie Gostic<br>
 19 July 2020
 
 This repository contains example code for deconvolving a known delay distribution from observed epidemic time series.
