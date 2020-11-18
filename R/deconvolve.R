@@ -13,15 +13,10 @@
 #' @param t_unobs_min Initial time of unobserved, undelayed time series
 #' @param n_unobs Length of unobserved time series
 #' @param n_iterations_max Maximum number of iterations.
-#' @param n_iterations Number of iterations.
-#' If provided, chi-squared stopping criteria will not be used.
+#' @param n_iterations No. of iters (optional), so 𝛘2 stop criteria not used.
 deconvolve_rltype_goldsteinetal <- function(
-  t_obs_min, y_obs,
-  delay_min, pmf_delay,
-  t_unobs_min, n_unobs,
-  n_iterations_max = 50,
-  n_iterations = NULL,
-  x_unobs_init = NULL
+  t_obs_min, y_obs, delay_min, pmf_delay, t_unobs_min, n_unobs,
+  n_iterations_max = 50, n_iterations = NULL, x_unobs_init = NULL
 ) {
   # Check parameters (dynamic typing is a horror; nobody should use R)
   is_int_vector <- function(x) {
@@ -100,10 +95,10 @@ deconvolve_rltype_goldsteinetal <- function(
     })
   }
   
-  # Function to compute chi-squared statistic
-  compute_chi_squared <- function(y_expected) {
+  # Function to compute 𝛘2 statistic
+  compute_chi_square <- function(y_expected) {
     squared_error <- (y_expected - y_obs)^2
-    1 / n_obs * sum(
+    1 / (n_obs - 2) * sum(
       ifelse(
         squared_error == 0 & y_expected == 0, 0,
         squared_error / y_expected
@@ -133,12 +128,12 @@ deconvolve_rltype_goldsteinetal <- function(
     
     x_unobs <- update_x_unobs(x_unobs, y_expected)
     y_expected <- compute_y_expected(x_unobs)
-    chi_squared <- compute_chi_squared(y_expected)
+    chi_square <- compute_chi_square(y_expected)
     
     # Termination condition:
-    # chi-squared statistic or specified number of iterations
+    # 𝛘2 statistic or specified number of iterations
     if(is.null(n_iterations)) {
-      if(chi_squared < 1) {
+      if(chi_square < 1) {
         done <- TRUE
       }
     }
@@ -159,7 +154,7 @@ deconvolve_rltype_goldsteinetal <- function(
     q = q,
     x_unobs = x_unobs,
     y_expected = y_expected,
-    chi_squared = chi_squared,
+    chi_square = chi_square,
     n_iterations = iteration
   )
 }
