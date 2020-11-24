@@ -1,0 +1,1038 @@
+---
+title: "Methods for Computing $R_t$ from Delayed, Undersampled Data"
+output: html_notebook
+---
+
+Deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
+
+Last updated: 11-24-2020
+
+
+## Introduction
+
+One of the major challenges in computing $R_t$ from observed data is that $R_t$ calculations depend on incidence at the time of $\textit{infection}$, whereas available data is always delayed, whether measured at the time of symptom onset, hospitalization, death, or other times during the course of an individual's infections. 
+Moreover, this delay distribution is probabilistic, and typically not known, although it may be estimated based on assumptions and empirical measurements of the course of the disease and the measurement process itself. 
+
+The mathematical operation needed in order to recover incidence at the time of infection from a set of data that has been subject to delay is $\textit{deconvolution}$, although many current methods in use effectively amount to $\textit{convolution}$, thus producing an incorrect distribution of infection curves. There are many mathematical methods known to carry out deconvolutions, all subject to different drawbacks depending on noise in the system and other unknown variables. 
+
+One method which has been previously shown to be successful for recovering incidence curves from observed data is the Richardson-Lucy method (Goldstein et al), an iterative method which begins with a guess for the input curve and interates to subsequently improve the deconvolved data. The original RL method depends on the specification of a known delay distribution, although it may be possible to generalize to cases where the delay distribution is unknown through joint estimation of the delay distribution and the incidence curve. 
+
+Here, we apply the RL method to synthetic data generated from stochastic SEIR models in order to assess its performance on synthetic data where the input curve is known exactly, and then assess its performance in the case where the delay distribution is misspecified. We've implemented a method for taking into account uncertainty in the delay distribution parameters. We've also implemented the option to specify a constant undersampling fraction over time, with the option to incorporate uncertainty in this parameter. Our implementation of RL is based on that of Goldstein et al, written as a matrix implementation. We've extend the method of Goldstein et al to a Bayesian setting, where we use an edge-enhancing prior based on the assumption of Poisson noise, adapting a method for including uncertainty in deconvolution of X-ray radiographs(Howard, Luttman and Fowler, "Sampling-based uncertainty quantification in deconvolution of X-ray radiographs" J. Computational and Applied Mathematics, 2014).
+
+For comparison, we also show the results for approximating the infection curve by shifting the observations in accordance with the delay distribution, again taking into account any specified uncertainty in the parameters of the delay distribution and fraction sampled.
+
+This implementation differs from our past implementations as it uses a lognormal delay distribution instead of a gamma delay distribution. This opens the possibility of doing a head-to-head comparison with EpiNow2; we've begun such a comparison, with code at the end of this document, but the comparison code is not quite complete, as the current specification of the delay distribution isn't necessarily compatible with the EpiNow2 method.
+
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(cowplot)
+library(EpiEstim)
+library(fs)
+library(magic)
+library(corpcor)
+library(purrr)
+theme_set(theme_bw())
+library(matrixStats)
+library("EpiNow2")
+library(data.table)
+detach(package:MASS) #This will throw an error if MASS isn't already in the workspace; that's fine, just ignore the error.
+```
+
+Specify name of folder for results.
+```{r}
+#intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
+intervention_length_name <- "_testing_clean_code"
+intervention_file_name <- sprintf("intervention%s", intervention_length_name)
+if (!dir.exists(intervention_file_name)) {
+  dir.create(intervention_file_name)
+}
+```
+
+Specify and save properties of the simulation, delay distribution, undersampling, the extent to which the delay distribution and undersampling parameters are misspecified and/or unknown, and number of iterations for RL and MCMC calculations.
+```{r}
+if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
+  parlist <- readRDS(sprintf("%s/params.Rds", intervention_file_name))
+} else {
+  parlist <- {
+    list(
+### Parameters for SEIR epidemic ###
+      N = 2e6, #total population size
+      E_init = 0,
+      I_init = 10,
+      t_E = 4, # mean time in E (latent period)
+      t_I = 4, # mean time in I (duration of infectiousness)
+      n_t =600, # total timesteps
+      pre_intervention_R0 = 2, # Initial R0 before interventions
+      intervention_R0 = 0.8, # Final R0 after interventions
+      partially_lifeted_R0 = 0.9,
+      intervention_time_1 = 80, # Timepoint at which intervention starts (at which underlying transmission rate begins to fall): intervention happens ~2.5 months after beginning of pandemic
+      intervention_time_2 = 80+450, #Not considering second intervention here, so just put it late
+      days_intervention_to_min = c(7), # Days from intervention start until transmission rate hits min_R0
+      days_to_Rt_rise = 1, #Not important as we aren't considering this far out
+      model_types = c('seir'), # Can also choose sir
+      methods = c('stochastic'), # could also choose ode, but would have to modify it to impose integer case counts
+### Observations - delay and undersampling ###
+      obs_1_offset = 1, #the first observation is at 1+length(delay dist)+obs_1_offset ~31
+      obs_2_offset = 120, #the last observation is at 1+length(delay dist)+obs_1_offset+obs_2_offset - observing over first ~4 months of epidemic
+      delay_distr_mean = 20, #mean 20, var 25 (std 5): modeled to observe deaths 
+      delay_distr_std = 5, 
+      time_to_obs = 2, #people appear in data at most two days after they die [uniformly distributed between 0 and 2]
+      frac_sampled = 1, #everybody who dies must appear in the data in order to compare to EpiNow2
+### Observations - uncertainty in delay and undersampling ###
+      delay_distr_mean_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the mean of the delay distribution - test with each value
+      delay_distr_std_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the std of the delay distribution - test with each value
+      time_to_obs_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the time to observation of the delay distribution - test with each value
+      frac_sampled_std_vec = c(0, .05, .1), #the percent uncertainty in the fraction sampled - test with each value
+### Misspecification in observation distributions ###
+      delay_distr_mean_mult_vec = c(.5, .8, 1, 1.2, 1.8), #multipliers for how much to misspecify delay distribution mean - test with each value
+      delay_distr_std_mult_vec = c(.5, .8, 1, 1.2, 1.8), #multipliers for how much to misspecy delay distribution std - test with each value
+      frac_sampled_mean_mult_vec = c(.8, .9, 1, 1.1, 1.2), #multipliers for how much to misspecify fraction sampled - test with each value
+      time_to_obs_mult = c(1), #multipliers for how much to misspecify time to observation - test with each value - here, no misspecification on time to observation
+### Parameters for Bayesian RL inference
+      max_RL_it = 15, #for computing EM in deconvolution
+      max_N_RL_MCMC = 10000, #for now; it would be better to check for convergence instead of just setting a max
+      burn_in_RL_MCMC = 500,
+### Methods for carrying out the inference of infections from observations - not currently implemented ###
+      inf_methods = c('shift', 'RL') #want to choose inference methods to compare (add 'epinow2' when implemented)
+    )
+  }  
+  saveRDS(parlist, file = sprintf("%s/params.Rds", intervention_file_name))
+}
+```
+
+## Simulate SEIR data using a stochastic model. 
+Putting the R0 and simplots folders in the intervention file.
+* If this throws an error, make sure packages expM and MASS are not included.
+* This will also throw an error if there is already a folder named intervention_file_name which containes files R0-2.0 and/or simplots.
+```{r}
+source('funs_simulation-sweep.R')
+sim_sweep(parlist)
+testplots(parlist)
+file_move("R0-2.0", intervention_file_name)
+file_move("simplots", intervention_file_name) 
+```
+
+
+Extract simulation results as a data frame. Plot the true epidemic curve. Plot the timeseries of $R_t$ values used as input.
+```{r}
+## Write a function to extract the simulation results as a data frame
+stoch_df <- function(){
+  readRDS(sprintf('%s/R0-%.1f/seir_%s_dec%.0f-%.0f_sim.rds',
+                  intervention_file_name,
+                  parlist$pre_intervention_R0, 
+                  parlist$methods,
+                  parlist$intervention_time_1, 
+                  parlist$days_intervention_to_min))$sim_df 
+}
+
+stoch_df() %>%
+ggplot() +
+  geom_line(aes(x = time, y = incidence))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1), lty = 2)+ ## Dashed line where Rt starts to decrease
+    geom_vline(aes(xintercept = parlist$intervention_time_2), lty = 2)+ ## Dashed line where Rt starts to decrease
+  ggtitle('Daily infections, SEIR simulation') -> inc
+
+stoch_df() %>% 
+  ggplot()+
+  geom_line(aes(x = time, y = true_r0)) +
+  geom_hline(aes(yintercept = 1), lty = 2)+
+  ylab('R0')+
+  ggtitle('Input Rt values') -> R0
+
+plot_grid(R0, inc, rel_heights = c(1,2), align = 'hv', nrow = 2)
+
+stoch_df
+```
+
+
+## Compute the curve of observed cases
+
+```{r}
+source('funs_impute_obs_times.R')
+```
+
+
+Lognormal observation delays. Definition of the delay distribution is given in "funs_impute_obs_times.R". First, define the true parameters that will be used for the distribution delays to observation.
+```{r, echo=FALSE}
+# The parameters named "true_" are the values used to compute times of observation from times of infection.
+true_mean <- parlist$delay_distr_mean
+true_std <- parlist$delay_distr_std
+true_time_to_obs <- parlist$time_to_obs
+true_frac_sampled <- parlist$frac_sampled
+
+# Using equations for "generation and parameters" from lognormal distribution wikipedia page
+true_meanlog <- log(true_mean^2/sqrt(true_mean^2 + true_std^2))
+true_stdlog <- log(1 + true_std^2/true_mean^2)
+```
+
+Define the parameters we will use to do the inference, which may be misspecified in comparison to the true delay distribution.
+```{r}
+# The parameters named "assumed_" are the values used to do the inference from times of observation to times of infection, 
+# which may be misspecified compared to the true values that were used to generate times of observation from times of infection.
+# For now, the assumed_ values are just equal to the true_ values
+assumed_mean <- parlist$delay_distr_mean
+assumed_std <- parlist$delay_distr_std
+assumed_time_to_obs <- parlist$time_to_obs
+assumed_frac_sampled <- parlist$frac_sampled
+
+# Using equations for "generation and parameters" from lognormal distribution wikipedia page
+assumed_meanlog <- log(assumed_mean^2/sqrt(assumed_mean^2 + assumed_std^2))
+assumed_stdlog <- log(1 + assumed_std^2/assumed_mean^2)
+
+```
+
+Compute the true delay distribution and plot.
+```{r}
+# This is the delay distribution we use to do the inference (could be misspecified compared to the true delay distribution used to generate the data).
+init_delay_distr_vec <- tabulate(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs))
+unnorm_delay_distr_vec <- ifelse(init_delay_distr_vec > 0, init_delay_distr_vec, 10^(-8)) #never 0; useful later
+delay_distr_vec <- unnorm_delay_distr_vec/sum(unnorm_delay_distr_vec) * assumed_frac_sampled
+
+#len_diff <- length(sim_df$new_infected)-length(delay_distr_vec)
+
+delay_distr_plot_df <- data.frame("num_days" = 1:length(delay_distr_vec), "delay_distribution" = delay_distr_vec) #note that num_days starts with 1, not 0, because "tabulate" bins data beginning with 1. this means we have an implicit assumption that infections are never observed on the day when they occur, which is realistic.
+
+delay_distr_plot_df %>% 
+  ggplot() +
+  geom_point(aes(x = num_days, y = delay_distr_vec, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = 1)  +
+  geom_line(aes(x = num_days, y = delay_distr_vec, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = 1.1)  +
+  scale_color_manual(values = c("black")) + 
+  scale_linetype_manual(values = c("solid")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("number of days")+
+  xlab("probability density") + 
+  ggtitle('True delay distribution') -> true_delay_distribution_plot
+true_delay_distribution_plot
+
+saveRDS(true_delay_distribution_plot, sprintf("%s/true_delay_distribution_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/true_delay_distribution_plot.png", intervention_file_name))
+
+rm(init_delay_distr_vec)
+rm(unnorm_delay_distr_vec)
+
+```
+
+
+Create a dataframe with the true epidemic curve and curve of observed cases using the true delay distribution.
+```{r, echo=FALSE}
+true_delay_fn <- function(nn) {
+  obs_delays(nn, true_meanlog, true_stdlog)
+}
+
+sim_df <- stoch_df() %>%
+  filter(time < max(time)) %>%
+  mutate(
+    new_infected = ifelse(is.na(dS), 0, dS))
+sim_df %>%
+  merge(
+    get_tObs_from_tInf(sim_df$new_infected, sim_df$time, r_delay_dist = true_delay_fn, return_times = T),
+    by = 'time', all = TRUE) %>% 
+  rename(new_observed = n) %>%
+  as.tbl() -> sim_df
+```
+
+Remove NA's from vectors of true cases and observed cases.
+```{r}
+new_inf_no_na <- ifelse(is.na(sim_df$new_infected), 0, sim_df$new_infected) #number of cases at the S -> E transition. This is what RL will be trying to reproduce.
+new_obs_no_na <- ifelse(is.na(sim_df$new_observed), 0, sim_df$new_observed) #this is the "data" vector we will apply RL to. 
+```
+
+## Inferring cases at time of infection from observed curves along with credible intervals.
+
+### Method 1: Shifting the observation curve by median of the assumed delay distribution 
+
+To be added: uncertainty if the median of the delay distribution or fraction of undersampling are assumed to be uncertain.
+
+```{r}
+one_shifted_curve <- function(observed_cases, vec_of_delays) {
+  shift_val <- ceiling(median(vec_of_delays))
+  frac_not_observed <- min(length(vec_of_delays[vec_of_delays > parlist$n_t])/length(vec_of_delays), 1-0.01*1/length(vec_of_delays)) #can't be true that fraction of not observed is exactly 1; this is a pathological case anyway
+  observed_cases[shift_val:length(observed_cases)]*(1/(1-frac_not_observed))
+}
+
+get_samples_shifting_method <- function(observed_cases, n_delay_samples) {
+  infection_curve_samples <- matrix(nrow = n_delay_samples, ncol = length(observed_cases))
+  for (curve_count in 1:n_delay_samples) {
+    vec_of_delays <- obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs)
+    next_curve <- one_shifted_curve(observed_cases, vec_of_delays)
+    infection_curve_samples[curve_count,] <- c(next_curve, rep(0, length(observed_cases) - length(next_curve)))
+  }
+  return(infection_curve_samples)
+}
+
+get_95_CI_shifting_method <- function(infection_curve_samples) {
+  colQuantiles(infection_curve_samples, probs = c(.025, .5, .975))
+}
+
+inf_curve_samples <- get_samples_shifting_method(sim_df$new_observed, 100)
+shift_CI <- get_95_CI_shifting_method(inf_curve_samples)
+#shift_CI
+
+plot(shift_CI[,1], col = 'blue', ylim = c(0, 6500), xlim = c(0, 300))
+points(shift_CI[,2], col= 'black')
+points(shift_CI[,3], col = 'red')
+lines(new_inf_no_na, col = "green")
+
+```
+
+## Carry out MCMC on the simulated data to get error estimates on the deconvolution.
+
+Bayesian method for computing infection curve with credible intervals through deconvolution. 
+* Specify: blurring matrix from delay distribution; observations from observed curve in specified time interval of observations. 
+* Compute: Inferred de-blurred infection curve using RL. Use this in the definition prior for the Bayesian inference. This is a slight difference from the Howard et al implementation, which used total variation to compute the deconvolved time series used in the prior. These two methods should be essentially equivalent when both are close to the true deconvolved curve. 
+* To compute posterior distribution on infections: Sample from distribution with likelihood defined through the assumption of Poisson noise and prior based on the derivative of the RL curve as a function of time, imposing a stronger prior when the derivative is larger (this is the sense in which the prior is "edge-enhancing"; without this, the Poisson likelihood will tend to make edges less sharp). Jointly infer a hyperprior dictating how strongly the edges are to be constrained.
+
+
+Reference: Sampling-based uncertainty quantification in deconvolution of X-ray radiographs. Howard, Luttman and Fowler, 2014
+
+Conventions: To agree with notation from the original Howard et al paper, $\vec{b}$ is the vector of observed counts, $\vec{u}$ is a vector of true counts such that $p(\vec{u}\vert\vec{b})$ is the probability that the true counts were $\vec{u}$ given that we observed $\vec{b}$. The prior $p(\vec{u})$ depends on a hyperprior which we call $\lambda$. The MCMC samples the distributions $p(\vec{u}\vert \lambda,\vec{b})$ and $p(\lambda \vert \vec{u}, \vec{b})$.
+
+## Matrix formulation of the Richardson-Lucy algorithm
+
+Since the description of the RL algorithm in the Goldstein et al paper is not in matrix notation, we write out a small example to show how the matrix language works (especially because the indexing is a little tricky, in order to keep definitions of time consistent between the RL curve and the curve giving the true infected time series).
+
+Let's do an example where an infection is observed $0, 1$ or $2$ days after it occurs, and we have access to counts $(d_1, d_2, d_3, d_4, d_5)$ which occur on days $(5, 6, 7, 8, 9)$. Denote the delay distribution by $(p_0, p_1, p_2)$. In the code, length($d$) is defined to be obs_2_offset.
+To be clear, the first day of observation is day $5$, the final day of observation is day $9$, and $\text{length}(p) = 3$.
+
+In this code I assume we don't start observing until after a time equal to the length of the delay distribution has passed. 
+In the list of parameters, instead of specifying the first day we observe directly, I define
+Here, we use the variable 
+```{r}
+obs_1_offset
+```
+such that the first day of observation is 
+```{r}
+obs_1_offset + length(p) + 1
+```
+An obs_1_offset of zero would thus correspond to day length(p)+1: we start on the day after length(p).
+Note that in our example, that means obs_1_offset equals 5-3-1 = 2.
+
+
+The counts we're trying to infer could have occurred on days $3, 4, 5, 6, 7, 8, 9$, a vector of length 7 = 5 + 3 - 1 = length($\vec{d})$+length($\vec{p}$)-1; call the vector of inferred cases $(u_1, u_2, \ldots, u_7)$. 
+
+For our initial guess, we'll take $\vec{u} = (\vec{d}, d_9, d_9)$; this is just $\vec{d}$ shifted by length($\vec{p}$)-1 concatenated with the final observed case value for the remainder of the timeseries. (We don't expect that the cases would actually remain constant toward the end of the time series; we just need a place to start for the algorithm.)
+
+RL solves the following deconvolution problem. In expectation, we know that: 
+$$ \begin{align}
+  d_1 &= u_1 p_2 + u_2 p_1 + u_3 p_0 \\
+  d_2 &= u_2 p_2 + u_3 p_1 + u_4 p_0 \\
+  &\ldots \\
+  d_i &= u_i p_2 + u_{i+1} p_1 + u_{i+2} p_0\\
+  &\ldots \\
+  d_5 &= u_5 p_2 + u_6 p_1 + u_7 p_0
+\end{align} $$
+(note that the the indices derive from the correspondence between time and index in the definitions of $\vec{d}$ and $\vec{u}$). 
+This is a linear system. Writing it in matrix notation, let $\hat{P}$ equal
+$$ \begin{bmatrix} 
+p_2 & p_1 & p_0 & 0   & 0   & 0   & 0   \\
+0   & p_2 & p_1 & p_0 & 0   & 0   & 0   \\
+0   & 0   & p_2 & p_1 & p_0 & 0   & 0   \\
+0   & 0   & 0   & p_2 & p_1 & p_0 & 0   \\
+0   & 0   & 0   & 0   & p_2 & p_1 & p_0 \\
+\end{bmatrix}$$
+
+In this notation, we have $$ \vec{d} = \hat{P} \vec{u} $$.
+
+In R, the circulant function produces a matrix from a vector; $p_{ij}_{obs} =$ circulant(c($p$, rep$(0, 7)$)) equals
+
+```{r}
+library(xtable)
+x <- xtable(circulant(c(c("p0", "p1", "p2"), rep(0, 7))))
+print(x, align=rep("",ncol(x)+1), floating=FALSE, tabular.environment="bmatrix", hline.after=NULL, include.rownames=FALSE, include.colnames=FALSE)
+t(x[1:7, (5-3+1):7])
+```
+
+$$ \begin{bmatrix}
+  p0 & p1 & p2 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\ 
+  0 & p0 & p1 & p2 & 0 & 0 & 0 & 0 & 0 & 0 \\ 
+  0 & 0 & p0 & p1 & p2 & 0 & 0 & 0 & 0 & 0 \\ 
+  0 & 0 & 0 & p0 & p1 & p2 & 0 & 0 & 0 & 0 \\ 
+  0 & 0 & 0 & 0 & p0 & p1 & p2 & 0 & 0 & 0 \\ 
+  0 & 0 & 0 & 0 & 0 & p0 & p1 & p2 & 0 & 0 \\ 
+  0 & 0 & 0 & 0 & 0 & 0 & p0 & p1 & p2 & 0 \\ 
+  0 & 0 & 0 & 0 & 0 & 0 & 0 & p0 & p1 & p2 \\ 
+  p2 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & p0 & p1 \\ 
+  p1 & p2 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & p0 \\ 
+  \end{bmatrix} $$ 
+so if we take 
+```{r}
+  t(p_ij_obs[1:7, (5-3+1):7])
+```
+we obtain $\hat{P}$. Here, $7$=length($\vec{u}$)= length($\vec{d}$)+length($\vec{p})-1$, $5-3+1 = \text{obs_1_offset + } 2$. 
+Note that the $1$-D deconvolution problem is $\textit{always}$ of this form; so we can think of the Richardson-Lucy algorithm as a way of estimating $\vec{u}$ given this underdetermined linear system. 
+
+This explicit example allows us to make a matrix implementation of RL while keeping all the definitions of time consistent with one another through proper indexing into the appropriate matrices. 
+
+## Bayesian implementation
+
+```{r}
+#for MCMC error estimation. NOTE: these packages have conflicting functions with packaages needed for simulation code; must remove them before going back to beginning of code
+library(expm)
+library(matlib)
+library(MASS)
+library(matrixStats)
+
+RL_delay <- function(delay_distr){
+  zero_indexed_distr <- c(10^(-8), ifelse(delay_distr_vec==0, 10^(-8), delay_distr_vec)) #can't have exactly 0 probabilities
+  zero_indexed_distr*sum(delay_distr)/sum(zero_indexed_distr) #keeps fraction of cases observed the same 
+}
+
+RL_conv_matrix <- function(delay_distr, obs_1, obs_2) {
+  p <- delay_distr
+  pmat <- circulant(c(p, rep(0, obs_2)))
+  t(pmat[(obs_1-length(p)+1):obs_2, obs_1:obs_2])
+}
+
+get_RL_curve <- function(obs_curve, delay_distr, conv_matrix){
+  d_obs <- obs_curve
+  p <- delay_distr
+  u_obs_guess <- c(d_obs, rep(max(d_obs[length(d_obs)],1), length(p)-1))
+  
+  p_ij_obs <- conv_matrix
+  
+  q_j <- colSums(p_ij_obs)
+  dim_p_ij <- dim(p_ij_obs)
+  p_ij_obs_rescaled <- p_ij_obs / matrix(q_j,nrow=dim_p_ij[1],ncol=dim_p_ij[2],byrow=TRUE)
+  print(dim(p_ij_obs_rescaled))
+  
+  u_obs_guess_rescaled <- u_obs_guess * q_j
+  d_obs_rescaled <- d_obs * q_j[(length(p)):length(u_obs_guess_rescaled)]
+
+  u_obs_rescaled <- u_obs_guess_rescaled
+  ind <- 1
+  while (ind < parlist$max_RL_it) {
+    c_obs <-p_ij_obs_rescaled %*% u_obs_rescaled
+    new_kernel_obs <- d_obs/c_obs
+    new_u_obs_rescaled <- u_obs_rescaled * t(t(new_kernel_obs) %*% p_ij_obs_rescaled)
+    u_obs_rescaled <- new_u_obs_rescaled
+    ind <- ind+1
+  }
+  u_obs_new <- u_obs_rescaled/q_j
+}
+
+```
+
+
+Covariance matrix for edge-enhancing prior for infection curve. 
+
+```{r}
+diffmat <- function(len) {
+  mat <- matrix(0, nrow = len, ncol = len)
+  dt <- 1 #timestep is one day; could change in the future
+  for(i in c(1:len)){
+    if(i==1) {
+      mat[i, i] <- -1/dt
+      mat[i, i+1] <- 1/dt
+    } else if(i==len){
+      mat[i, i-1] <- -1/dt
+      mat[i, i] <- 1/dt
+    } else {
+      mat[i, i+1] <- 1/(2*dt)
+      mat[i, i-1] <- -1/(2*dt)
+    }
+  }
+  mat
+}
+
+LTV <- function(u, beta){
+  Dx <- diffmat(length(u))
+  phi <- 1/(sqrt((Dx %*% u)^2) + beta) #the matrix will no longer be constant along the diagonal; this has the effect of constraining times where the RL curve has higher derivative more stringently than times where the curve has lower derivative
+  phimat <- diag(c(phi)) 
+  t(Dx) %*% phimat %*% Dx  #the prior on u is gaussian where the variance of the inferred infection at each time depends on the magnitude of the derivative of the RL curve at that time
+}
+```
+
+Define the conditional distributions that we will actually sample from (see reference).
+```{r}
+get_u_mean <- function (A, b, u, lambda, beta) {
+  C <- diag(b+1)
+  inv_mean_1 <- t(A) %*% solve(C) %*% A + lambda * LTV(u, beta)
+  mean_1 <- solve(inv_mean_1)
+  mean_2 <- t(A) %*% solve(C) %*% b
+  mean_1 %*% mean_2
+}
+
+get_u_covar <- function (A, b, u, lambda, beta) {
+  C <- diag(b+1)
+  solve(t(A) %*% solve(C) %*% A + lambda * LTV(u, beta))
+}
+
+sample_u_given_lambda_b <- function (A, b, u, lambda, beta, alpha) {
+  abs(mvrnorm(n = 1, get_u_mean(A, b, u, lambda, beta), get_u_covar(A, b, u, lambda, beta)))
+}
+
+sample_lambda_given_u_b <- function (A, b, u, lambda, beta, alpha, ref_u) {
+  rgamma(1, length(u)/2 + alpha, 1/2 * t(u) %*% LTV(ref_u, beta) %*% u + beta)
+}
+```
+
+
+Compute the RL curve and then carry out the sampling. 
+```{r}
+get_samples_RL_method <- function(obs_curve, delay_vec){
+  p <- RL_delay(delay_vec) #delay distribution vector - notation in keeping with previous notation. this changes the delays to be indexed from 0.
+    
+  #note: obs_1 must be at least length(p) in this formulation.
+  obs_1 <- length(p)+parlist$obs_1_offset +1
+  obs_2 <- obs_1 + parlist$obs_2_offset
+  obs_dat <- obs_curve[obs_1:obs_2] #previously known as d_obs
+  
+  conv_matrix <- RL_conv_matrix(p, obs_1, obs_2) #toeplitz matrix for carrying out convolution was defined in RL section of code
+  true_dat <-  get_RL_curve(obs_dat, p, conv_matrix)  #this initializes the MCMC - give it the RL inferred infections since this is our best guess.
+  
+  backgrd <- 1 #could add nontrivial background counts. nonzero to normalize log in posterior. integer because all counts must be integers.
+  #hyperprior for lambda: gamma, mean is alpha/beta and variance is alpha/beta^2
+  beta <- 1
+  alpha <- 1
+  dt <- 1 #unit of time steps, in days
+  lambda0 <- alpha/beta #start with initial value of lambda = mean of hyperprior
+
+  max_N <- parlist$max_N_RL_MCMC
+  burn_in <- parlist$burn_in_RL_MCMC
+  
+  #initializing MCMC with the RL-inferred incidence curve at time of infection.
+  lambda <- lambda0
+  curr_u <- true_dat 
+  all_u <- matrix(, nrow = max_N, ncol = length(true_dat)) #samples of the $p(\vec{u}\vert \vec{b})$ distribution (with $\lambda$?)
+  all_lambda <- matrix(, nrow = max_N, ncol = 1) #samples the $\lambda$ distribution.
+
+  all_u[1,] <- curr_u
+  all_lambda[1,] <- lambda
+
+  for (k in c(2:max_N)) {
+    #new_u <-  sample_u_given_lambda_b(conv_matrix, obs_dat, curr_u, lambda, beta)
+    new_u <-  sample_u_given_lambda_b(conv_matrix, obs_dat, true_dat, lambda, beta) #the covariance matrix is constructed from the RL curve, true_dat
+    new_lambda <- sample_lambda_given_u_b(conv_matrix, obs_dat, curr_u, lambda, beta, alpha, true_dat)
+    
+    all_u[k,] <- new_u
+    all_lambda[k,] <- new_lambda
+  
+    curr_u <- new_u
+    lambda <- new_lambda
+  }
+  return(all_u)
+}
+
+get_95_CI_RL_method <- function(infection_curve_samples) {
+  colQuantiles(infection_curve_samples, prob = c(0.025, 0.5, .975))
+}
+
+#Uncomment when RL inference is desired
+all_u <- get_samples_RL_method(sim_df$new_observed, delay_distr_vec)
+dim(all_u)
+
+#ADD CHECK FOR CONVERGENCE FROM MARYLESA'S CODE
+```
+
+Plot curve with $95\%$ credible intervals.
+```{r}
+p <- RL_delay(delay_distr_vec) #delay distribution vector - notation in keeping with previous notation. this changes the delays to be indexed from 0.
+    
+#note: obs_1 must be at least length(p) in this formulation.
+obs_1 <- length(p)+1+parlist$obs_1_offset
+obs_2 <- obs_1 + parlist$obs_2_offset
+
+u_quants <- colQuantiles(all_u[5000:10000,], probs = c(0, 0.025, .5, .975, 1))
+
+dim(u_quants)
+length(sim_df$new_infected[(obs_1-length(p)-1+2):(obs_2)])
+
+bayes_deconv_df <- data.frame("time" = (obs_1-length(p)-1+2):(obs_2), "inferred.025" = u_quants[,2], "inferred.median" = u_quants[, 3], "inferred.975" = u_quants[, 4], "true" = sim_df$new_infected[(obs_1-length(p)-1+2):(obs_2)])
+
+bayes_deconv_df %>%
+  ggplot() +
+  geom_line(aes(x = time, y = inferred.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = .8)  +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .8) + 
+  geom_ribbon(aes(x = time, ymin = inferred.025, ymax = inferred.975, fill = "95% CI", legend = "95% CI"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = 1.1) +
+  scale_color_manual(values = c("black", "red", "blue")) + 
+  scale_linetype_manual(values = c("dotted", "solid", "longdash")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle('Bayesian Deconvolution') -> RL_inferred_plot_with_CI
+RL_inferred_plot_with_CI
+
+saveRDS(RL_inferred_plot_with_CI, sprintf("%s/RL_inferred_plot_with_CI.Rds", intervention_file_name))
+ggsave(sprintf("%s/RL_inferred_plot_with_CI.png", intervention_file_name))
+```
+
+## Additional work in various stages
+* Cutting off time series at different points and comparing inferred infection curves as observation interval becomes longer, for perfectly specified and misspecified delay distribution
+* Pipeline for taking into account uncertainty in delay distribution by defining a prior on the mean and variance and bootstrapping
+* Computations of $R_t$, not just inferred curve of infections.
+* Epinow2 comparison (see below)
+
+## Future suggested improvements 
+
+* Check to see how often the true infection curve lies within the credible interval computed from the observed curve (or distribution of observed curves) for all three methods, and see how wide the credible intervals are given the same inputs.
+* Inferring delay distribution using Bayesian methods (or "blind deconvolution" - EM)
+* Time-dependent delay distributions (i.e. non-circulant deblurring matrix)
+* Pipeline for testing methods based on assumed knowns and unknowns of a given dataset [i.e., choosing a method].
+
+
+## EpiNow2 inferred cases: incomplete
+
+The purpose of this code is to compare the shifted approach and the Bayesian approach to the EpiNow2 approach; however, it's not quite complete, in the sense that the delay distribution defined for the EpiNow2 code below is not the same as the delay distributions defined above. This can be fixed, but I haven't done so here.
+
+```{r}
+get_EpiNow2_dates <- function(obs_curve, delay_vec){
+  p <- RL_delay(delay_vec) #use same conventions as for the RL delay vector
+  #note: obs_1 must be at least length(p) in this formulation.
+  obs_1 <- length(p)+1+parlist$obs_1_offset
+  obs_2 <- obs_1 + parlist$obs_2_offset
+  obs_dat <- obs_curve[obs_1:obs_2] 
+  
+  print("obs_1")
+  print(obs_1)
+  print("obs_2")
+  print(obs_2)
+  
+  startDate <- as.Date("2020-03-01") #random start date, doesn't matter for these purposes
+  seq(startDate, by="1 day", length.out=length(obs_dat))
+}
+
+get_EpiNow2_observed_curve <- function(obs_curve, delay_vec){
+  p <- RL_delay(delay_vec) #use same conventions as for the RL delay vector
+  #note: obs_1 must be at least length(p) in this formulation.
+  obs_1 <- length(p)+1+parlist$obs_1_offset
+  obs_2 <- obs_1 + parlist$obs_2_offset
+  obs_curve[obs_1:obs_2]
+}
+
+get_EpiNow2_input <- function(time_vec, observations) {
+  date <- time_vec
+  confirm <- observations
+  data.frame(date, confirm)
+}
+
+```
+
+```{r}
+reporting_delay <- EpiNow2::bootstrapped_dist_fit(tabulate(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs)))
+reporting_delay
+```
+
+```{r}
+get_samples_EpiNow2_method <- function(obs_curve, delay_vec) {
+
+  ####################################################
+   
+   #TESTING DEFINITION OF REPORTING DELAY
+   
+   #reporting_delay <- EpiNow2::bootstrapped_dist_fit(rlnorm(100, log(6), 1))
+   delay_samples <- obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs)
+   init_delay_vec <- tabulate(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs))
+   nonnorm_delay_vec <- ifelse(init_delay_vec > 0, init_delay_vec, 10^(-8))
+   delay_vec <- nonnorm_delay_vec/sum(nonnorm_delay_vec)
+   reporting_delay <- EpiNow2::bootstrapped_dist_fit(delay_samples)
+   reporting_delay$max <- 50
+   
+   # delay_vec <- tabulate(rlnorm(100, log(6), 1))
+  
+    ####################################################
+  
+   #THESE REPORTED CASES ARE FINE
+  
+   reported_cases_dates <- get_EpiNow2_dates(obs_curve, delay_vec)
+   reported_cases_confirm <- get_EpiNow2_observed_curve(obs_curve, delay_vec)
+   reported_cases <- data.table("date" = reported_cases_dates, "confirm" = reported_cases_confirm)
+  
+  #reported_cases_dates <- get_EpiNow2_dates(obs_curve, delay_vec)
+  #reported_cases_confirm <- get_EpiNow2_observed_curve(obs_curve, delay_vec)
+  #reported_cases <- EpiNow2::example_confirmed[1:50]
+  #####################################################
+  
+  #THIS DEFINITION OF GENERATION TIME IS FINE
+   
+  generation_time <- list(mean = parlist$true_mean_SI,
+                          mean_sd = 1, #tests show that it's necessary to give the mean and sd a nonzero standard deviation in order to perform well
+                          sd = sqrt(parlist$true_var_SI), #TOO BIG?
+                          sd_sd = 1,
+                          max = 60)
+  # generation_time <- list(mean = EpiNow2::covid_generation_times[1, ]$mean,
+  #                        mean_sd = EpiNow2::covid_generation_times[1, ]$mean_sd,
+  #                       sd = EpiNow2::covid_generation_times[1, ]$sd,
+  #                       sd_sd = EpiNow2::covid_generation_times[1, ]$sd_sd,
+  #                       max = 30)
+  #####################################################
+
+ incubation_period <- list(mean = EpiNow2::covid_incubation_period[1, ]$mean,
+                         mean_sd = EpiNow2::covid_incubation_period[1, ]$mean_sd,
+                         sd = EpiNow2::covid_incubation_period[1, ]$sd,
+                         sd_sd = EpiNow2::covid_incubation_period[1, ]$sd_sd,
+                         max = 30)
+  ########################################################
+  
+  estimates <- EpiNow2::epinow(reported_cases = reported_cases, 
+                             generation_time = generation_time,
+                             delays = list(incubation_period, reporting_delay),
+                             horizon = 1, samples = 1000, warmup = 500, 
+                             cores = 8, chains = 6, verbose = TRUE, 
+                             adapt_delta = 0.95)
+}
+```
+
+This is where we need to edit the reporting delay to match the code above.
+```{r}
+init_delay_vec_epinow <- tabulate(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs))
+nonnorm_delay_vec_epinow <- ifelse(init_delay_vec_epinow > 0, init_delay_vec_epinow, 10^(-8))
+delay_vec_epinow <- nonnorm_delay_vec_epinow/sum(nonnorm_delay_vec_epinow)
+reporting_delay <- EpiNow2::bootstrapped_dist_fit(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs))
+reporting_delay$max <- 50
+
+#reporting_delay <- EpiNow2::bootstrapped_dist_fit(rlnorm(100, log(6), 1))
+  
+#delay_vec_epinow <- tabulate(rlnorm(100, log(6), 1))
+
+epinow2_testing <- get_samples_EpiNow2_method(sim_df$new_observed, delay_vec_epinow)
+
+reported_cases_dates <- get_EpiNow2_dates(sim_df$new_observed, delay_vec_epinow)
+reported_cases_confirm <- get_EpiNow2_observed_curve(sim_df$new_observed, delay_vec_epinow)
+reported_cases <- data.table("date" = reported_cases_dates, "confirm" = reported_cases_confirm)
+
+delay_vec_epinow
+length(delay_vec_epinow)
+```
+
+Trying to define a good test case for epiestim.
+```{r}
+length(sim_df$new_observed)
+
+epinow2_testing
+
+epinow2_testing$plots$infections$data -> epinow_plot_df
+epinow_plot_df
+
+#FIGURING OUT START AND END TIMES FOR INFECTED FROM EPINOW2
+length(epinow_plot_df$date)
+length(63:125)
+length((63-16):125)
+#epinow2_covid_incubation <- epinow2_testing
+
+```
+* Improve the definition of the delay distribution so that it applies to both the deconvolution and the epinow2.
+* Add test of uncertainty.
+
+Below: Figuring out date where the peak infections is (and thus time just after intervention). **Have to run the whole notebook with consistent parameters, otherwise the results will of course be different.**
+```{r}
+bayes_deconv_df %>%
+  ggplot() +
+  geom_line(aes(x = time, y = inferred.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = 1.25)  +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) +
+  geom_ribbon(aes(x = time, ymin = inferred.025, ymax = inferred.975, fill = "95% CI", legend = "95% CI"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = 1.1) +
+  scale_color_manual(values = c("black", "red", "blue")) +
+  scale_linetype_manual(values = c("dotted", "solid", "longdash")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") +
+  ggtitle('Bayesian Deconvolution')
+
+length(sim_df$new_infected)
+
+length(epinow_plot_df$date)
+length(bayes_deconv_df$true)
+length(bayes_deconv_df$true[(obs_1 + 1):obs_2])
+length(obs_1:(obs_2+14))
+length(bayes_deconv_df$true)
+ bayes_deconv_df$true[obs_1:obs_2]
+
+epinow_plot_df %>%    
+  ggplot() +
+  geom_line(aes(x = date, y = median, color = "Median inferred infections", linetype = "Median inferred infections")) + 
+  geom_line(aes(x = date, y = sim_df$new_infected[(63-16-14):(125-14)], col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) +
+  geom_ribbon(aes(x = date, ymin = bottom, ymax = top, fill = "95% CI", legend = "95% CI"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$obs_1_offset, color = "Intervention Date", linetype = "Intervention Date")) +
+  scale_linetype_manual(values=c("dotted", "solid", "longdash")) + 
+  scale_color_manual(values = c("black", "red", "blue")) +
+  labs(linetype = "", colour = "", fill = "") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle(sprintf('Number of inferred cases from epinow2')) -> epi_plot
+
+epi_plot
+
+RL_inferred_plot_with_CI
+
+length(epinow_plot_df$date)
+length(bayes_deconv_df$time)
+length(1:79)
+length(45:123)
+bayes_deconv_df[45:123,]
+
+#all_plot_df <- cbind(epinow_plot_df, bayes_deconv_df[45:123,])
+all_plot_df <- cbind(epinow_plot_df, bayes_deconv_df[1:79,])
+
+all_plot_df
+```
+
+```{r}
+length(all_plot_df$date)
+plot(all_plot_df$date)
+length(all_plot_df$time)
+plot(all_plot_df$time, col = "blue")
+length(bayes_deconv_df$inferred.median)
+length(sim_df$new_infected[47:125])
+
+startDate_check <- as.Date("2020-02-16") #random start date, doesn't matter for these purposes
+  seq(startDate_check, by="1 day", length.out=length(all_plot_df$date))
+
+all_plot_df %>% 
+  ggplot() +
+  geom_line(aes(x = date, y = median, color = "Median inferred infections", linetype = "Median inferred infections")) + 
+  geom_line(aes(x = date, y = sim_df$new_infected[1:79], col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) + 
+  geom_ribbon(aes(x = date, ymin = bottom, ymax = top, fill = "95% CI, epinow2", legend = "95% CI, epinow2"), alpha = 0.4) +
+  geom_line(aes(x = date, y = inferred.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = 1.25)  +
+  #geom_line(aes(x = date, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) + 
+  geom_ribbon(aes(x = date, ymin = inferred.025, ymax = inferred.975, fill = "95% CI, deconvolution", legend = "95% CI, deconvolution"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$obs_1_offset, color = "Intervention Date", linetype = "Intervention Date")) +
+  scale_linetype_manual(values=c("dotted", "solid", "longdash", "solid")) + 
+  scale_color_manual(values = c("black", "red", "blue", "green")) +
+  labs(linetype = "", colour = "", fill = "") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle(sprintf('Comparing inferred numbers of infection')) 
+#The two infection curves are different because I input different delay distribution vectors between the two.
+
+
+
+epi_plot_df_combine <- epi_plot
+epi_plot_df_combine$frame <- 1
+bayes_deconv_df_combine <- bayes_deconv_df
+bayes_deconv_df_combine$frame <- 2
+```
+```{r}
+all_plot_df %>% 
+  ggplot() +
+  #geom_line(aes(x = date, y = median, color = "Median inferred infections", linetype = "Median inferred infections")) + 
+  #geom_line(aes(x = date, y = sim_df$new_infected[2:124], col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) + 
+  #geom_ribbon(aes(x = date, ymin = bottom, ymax = top, fill = "95% CI, epinow2", legend = "95% CI, epinow2"), alpha = 0.4) +
+  geom_line(aes(x = seq(startDate_check, by="1 day", length.out=length(all_plot_df$date)), y = inferred.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = 1.25)  +
+  #geom_line(aes(x = date, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = 1.25) + 
+  geom_ribbon(aes(x = seq(startDate_check, by="1 day", length.out=length(all_plot_df$date)), ymin = inferred.025, ymax = inferred.975, fill = "95% CI, deconvolution", legend = "95% CI, deconvolution"), alpha = 0.4) +
+  #geom_vline(aes(xintercept = parlist$obs_1_offset, color = "Intervention Date", linetype = "Intervention Date")) +
+  scale_linetype_manual(values=c("dotted", "solid", "longdash", "solid")) + 
+  scale_color_manual(values = c("black", "red", "blue", "green")) +
+  labs(linetype = "", colour = "", fill = "") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle(sprintf('Comparing inferred numbers of infection')) 
+
+
+all_plot_df$time
+
+all_plot_df$date
+```
+
+```{r}
+p <- RL_delay(delay_distr_vec) #use same conventions as for the RL delay vector
+#note: obs_1 must be at least length(p) in this formulation.
+p
+obs_1 <- length(p)+1+parlist$obs_1_offset
+obs_2 <- obs_1 + parlist$obs_2_offset
+obs_1 #time = 71 = 9 days before intervention
+obs_2
+obs_2-obs_1+1
+length(get_EpiNow2_observed_curve(sim_df$obs_cases, delay_distr_vec))
+parlist$intervention_time_1 #time = 80 = 9 days after beginning of observations
+parlist$obs_1_offset #time = 81
+parlist$obs_2_offset #val = 62; time of obs_2 = 81 + 62 = 143
+length(delay_distr_vec) #length = 68
+length(epinow_plot_df$date) #length = 77
+#epinow2 must be forecasting from date 63 to date 77, i.e. 2 weeks
+
+which.max(epinow_plot_df$median) #THE PEAK IS HAPPENING AT DAY 38. WHAT IS DAY 38? NEED TO RUN ALL CODE WITH epinow2 DELAY DISTRIBUTION, as this will change peak.
+epinow_plot_df[38]
+parlist$intervention_time_1 #80
+parlist$obs_1_offset
+epinow_plot_df[77] #max
+epinow_plot_df[obs_1]
+```
+
+###################################################################################################################################
+
+### Visualizing differences among inference methods
+
+Collect inferred infections into a single data frame:
+* method_df <- get_samples_method() for all methods
+* method_CI_df <- get_95_CI_method() for all methods
+* ggplot facet grid: method_CI_df, by method; line - median; ribbon - from 2.5% to 97.5%; with true infections; with vline for intervention time (when $R_t$ starts decreasing); with vlines for times that we are observing
+* table: for all methods, difference between max $\pm$ CI and true max
+* facet grid: difference between method (and CI's) and true infections across time after shifting by max
+* facet grid: fractional difference between method (and CI's) and true infections after shifting by max - do errors just divide (since true infections are assumed to be perfectly known)?
+* [facet grid: $R_t$ for all methods - how to do with CI's?]
+
+
+```{r}
+# FIGURE EXAMPLE CODE FROM OUR PAPER
+# ymin = 0; ymax =2.5
+# plot_df %>%
+#   filter(!is.na(mean) & time < 250) %>%
+#   mutate(`975` = ifelse(`975`>ymax, ymax, `975`),
+#          `025` = ifelse(`025`<ymin, ymin, `025`)) %>%
+#   mutate(Fit_method = factor(Fit_method, labels = c('Bettencourt & Ribiero', 'Cori et al.', 'Wallings & Teunis'))) %>%
+#   ggplot() +
+#   geom_line(aes(x = time, y = true_rt), lwd = 1)+
+#   geom_line(aes(x = time, y = mean, color = Fit_method)) +
+#   geom_ribbon(aes(x = time, ymin = `025`, ymax = `975`, fill = Fit_method), alpha = 0.3)+
+#   xlab('time') +
+#   ylab(expression(paste(R[t]))) +
+#   ylim(c(ymin, ymax))+
+#   facet_wrap(.~Fit_method) +
+#   theme(legend.position = 'none')+
+#   ggtitle(expression(paste('True ', R[t], ' vs. estimated values')), subtitle = expression(paste('Black line shows true ', R[t], ' specified when generating synthetic data'))) +
+#   labs(fill = 'Estimation method', color = "Estimation method")
+# ggsave('figs/Compare_3_methods.png', width = 7, height = 4, units = 'in', dpi = 300)
+
+plot_df <- merge(shift_inferred_df, RL_inferred_df, epinow_inferred_df, by = "time")
+plot_df %>% 
+  ggplot()+
+  geom_line() + #true infections
+  geom_line() + #inferred cases
+  geom_line() + #inferred_median
+  geom_ribbon() + #from 025 to 975
+  geom_vline() + #observed_lower_limit 
+  geom_vline() + #observed_higher_limit
+  geom_vline() + #intervention time
+#  facet_grid() + #put inferred plots for all misspecified median(delay), variance(delay), etc. next to each other
+  scale_linetype_manual(values=c("solid", "solid", "dotted")) + #set linetypes for lines and ribbons as necessary
+  scale_color_manual(values = c("blue", "red", "green")) + #set colors for lines and ribbons as necessary
+  labs(color = "Infections", linetype = "Infections") + #put everything in one legend with single label
+  ylab("counts")+
+  xlab("time (days)") +
+  ggtitle('Misspecified delay distribution comparisons')  
+  
+
+
+
+
+```
+
+* Combine all inferred curves and credible intervals into a single dataframe, and plot inferred intervals with true curve at time of infection. 
+```{r}
+inferred_df <- merge(shift_df, deconf_df, epinow2_df, by = 'time', all = 'TRUE')
+sim_df %>%
+  merge(inferred_df, by = 'time', all = 'TRUE')    %>%
+  as.tbl() %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>% 
+  filter(data_type == "new_inferred"| data_type == "new_infected" | data_type == "new_observed" | data_type == "shifted_obs_cases") %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_vline(aes(xintercept = parlist$intervention_time_1), linetype = "dotted") +
+  scale_linetype_manual(values=c("solid", "solid", "dotted", "solid")) + 
+  scale_color_manual(values = c("blue", "red", "green", "green")) +
+  labs(color = "Infections", linetype = "Infections") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle(sprintf('Number of inferred cases from Richardson-Lucy')) -> inferred_plot
+
+inferred_plot
+
+saveRDS(inferred_plot, sprintf("%s/all-case-curves.Rds", intervention_file_name))
+ggsave(sprintf("%s/all-case-curves.png", intervention_file_name))
+
+```
+
+Plot differences and normalized differences between inferred infections and true infections. 
+
+*Change to plot two quantities: difference between peaks, and differences between shape of curves (i.e. once they are shifted to have the same peak).*
+
+```{r}
+#diff <-  u_obs_new - u_true[(obs_1 - length(p) + 1):obs_2]
+
+diff <-  u_obs_new - u_true[(obs_1 - length(p)):(obs_2-1)]
+diff_shift <- inferred_df$shifted_obs_cases - u_true[(obs_1 - length(p)):(obs_2-1)]
+
+sim_df2 <- sim_df
+diff_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff, diff_shift)
+names(diff_df) <- c('time', "diff", "diff_shift")
+
+sim_df2 %>%
+  merge(diff_df, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>%
+  filter(data_type == "diff" | data_type == "diff_shift" & !is.na(count)) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_hline(aes(yintercept = 0, color = 'zero', linetype = 'zero'))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) +
+  scale_linetype_manual(values=c("solid", "solid", "dotted", "solid")) + 
+  scale_color_manual(values = c("red", "green", "black", "black")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend") +
+  ylab("count (difference)")+
+  xlab("time (days)") + 
+  ggtitle('Difference in number of inferred cases from Richardson-Lucy') -> diff_plot
+
+diff_plot
+
+saveRDS(diff_plot, sprintf("%s/difference-cases-RL.Rds", intervention_file_name))
+ggsave(sprintf("%s/difference-cases-RL.png", intervention_file_name))
+
+```
+
+Differences as a fraction of total cases.
+```{r}
+#diff <-  u_obs_new - u_true[(obs_1 - length(p) + 1):obs_2]
+
+diff_frac <-  abs((u_obs_new - u_true[(obs_1 - length(p)):(obs_2-1)])/(u_true[(obs_1 - length(p)):(obs_2-1)]))
+diff_frac_shift <- abs((u_true[(obs_1 - length(p)):(obs_2-1)] - shifted_obs_cases[(obs_1 - length(p)):(obs_2-1)])/(u_true[(obs_1 - length(p)):(obs_2-1)]))
+
+#diff_percent
+
+sim_df3 <- sim_df
+diff_df_frac <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff_frac, diff_frac_shift)
+names(diff_df_frac) <- c('time', "diff_frac", "diff_frac_shift")
+
+sim_df3 %>%
+  merge(diff_df_frac, by = 'time', all = 'TRUE') %>%
+  as.tbl()  %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>%
+  filter(data_type == "diff_frac" | data_type == "diff_frac_shift" & !is.na(count)) %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_hline(aes(yintercept = 0, color = 'zero', linetype = 'zero'))+
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) +
+  scale_linetype_manual(values=c("solid", "solid", "dotted", "solid")) + 
+  scale_color_manual(values = c("red", "green", "black", "black")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend") +
+  ylab("count (abs((inferred-true)/true))")+
+  xlab("time (days)") + 
+  ggtitle('Difference ratio: abs((inferred-true)/true)') -> diff_frac_plot
+
+diff_frac_plot
+
+saveRDS(diff_frac_plot, sprintf("%s/difference-frac-cases-RL.Rds", intervention_file_name))
+ggsave(sprintf("%s/difference-frac-cases-RL.png", intervention_file_name))
+
+```
+
+
+Plot as a single figure. 
+```{r}
+
+plot_grid(inferred_plot, diff_plot, diff_frac_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+
+all_plot
+
+saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/all_plot.png", intervention_file_name))
+```
+
+## Appendix: Exporting to MATLAB for testing with Marylesa's code. (Not currently functional.)
+
+```{r}
+
+writeMat(sprintf("%s/A.mat", intervention_file_name), A = p_ij_obs)
+writeMat(sprintf("%s/sim_data.mat", intervention_file_name), sim_data = sim_df2)
+
+LTVmat <- LTV(u_true, beta)
+writeMat(sprintf("%s/L.mat", intervention_file_name), L = LTVmat)
+
+```

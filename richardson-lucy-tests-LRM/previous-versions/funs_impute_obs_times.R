@@ -1,15 +1,7 @@
-## Impute times of observation from times of infection
+## Impute times of observagtion from times of infection
 
-##Authors: Katie Gostic and Lauren McGough
+##Author: Katie Gostic
 
-#Computes nn delays from infection to observation.
-#Distribution of time from infection to symptoms, hospitalization or death (depending on what is being observed) is lognormal distribution with parameters meanlog = mean of logarithm; stdlog = std of logarithm.
-#Distribution of time from symptoms/hospitalization/death to being recorded in the data is uniform on the interval [0, max_sym_to_obs]
-obs_delays <- function(nn, meanlog, stdlog, max_sym_to_obs = 2){
-  incubation_vals <- rlnorm(nn, meanlog, stdlog)
-  r_sym_to_obs <- runif(nn, min = 0, max = max_sym_to_obs)  # Delay from symptoms -> observation
-  delays <- incubation_vals + r_sym_to_obs
-}
 
 #' This function draws a random sample of size n from the delay distribution (the distribution of times from infection to case observation)
 #' Specify the incubation period distribution as gamma(shape = 2, scale = 3) (mean of 6d)
@@ -32,7 +24,7 @@ SEIR_delay_dist <- function(nn){
 #' This function imputes times of case observation from true, underlying times of infection output by the S->E transition in the SEIR model.
 #' @param n_dS is a vector of n infections incident on day t
 #' @param times is a vector of times, corresponding to the entries of n_dS
-#' @param r_delay_dist is a function that draws random samples from the distribution of time delays from infection to observation
+#' @param r_delay_dist is a function that draws random samples from the distrubition of time delays form infection to observation
 #' #' @param  return_times if true, return a data frame with time. If false, return only a vector of the number observed at each time.
 get_tObs_from_tInf <- function(n_dS, 
                                times, 
@@ -42,12 +34,15 @@ get_tObs_from_tInf <- function(n_dS,
   stopifnot(n_dS == round(n_dS))
   n_dS <- ifelse(is.na(n_dS), 0, n_dS)
   
-  # This function draws times of observation for each of the ndS cases incident at a given time point tt
+  # This function draws times of observation for each of the ndS cases incident at a given time point
   get_obs_times_for_one_timestep <- function(ndS, tt){
-    ceiling(tt + r_delay_dist(ndS))  # Round up: infections are recorded at the end of the day in progress
+    (tt + 
+ #     - runif(ndS) +  ## Subtract a uniform between 0 and 1 to get exact time of day of onset on the previous day
+       + r_delay_dist(ndS))  %>% 
+      ceiling()  # Round up: infections are recorded at the end of the day in progress
   } 
   
-  ## Get a vector of observation times for each infection
+  ## Get a vector of imputed observation times for each infection
   obs_time_vec <- mapply(FUN = get_obs_times_for_one_timestep, ndS = n_dS, tt = times) %>%
     unlist() 
   stopifnot(length(obs_time_vec) == sum(n_dS))
