@@ -277,6 +277,26 @@ points(shift_CI[,2], col= 'black')
 points(shift_CI[,3], col = 'red')
 lines(new_inf_no_na, col = "green")
 
+
+shift_df <- data.frame("time" = 1:length(shift_CI[,1]), "shift.025" = shift_CI[,1], "shift.median" = shift_CI[, 2], "shift.975" = shift_CI[, 3], "true" = sim_df$new_infected[1:length(shift_CI[,1])])
+
+shift_df %>%
+  ggplot() +
+  geom_line(aes(x = time, y = shift.median, col = "Median Infections, Shifted", lty = "Median Infections, Shifted", legend = "Median Infections, Shifted"), size = .8)  +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .8) + 
+  geom_ribbon(aes(x = time, ymin = shift.025, ymax = shift.975, fill = "95% CI", legend = "95% CI"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = 1.1) +
+  scale_color_manual(values = c("black", "red", "blue")) + 
+  scale_linetype_manual(values = c("dotted", "solid", "longdash")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle('Shifting the observed curve back in time') -> shifted_plot_with_CI
+shifted_plot_with_CI
+
+saveRDS(shifted_plot_with_CI, sprintf("%s/shifted_plot_with_CI.Rds", intervention_file_name))
+ggsave(sprintf("%s/shifted_plot_with_CI.png", intervention_file_name))
+
 ```
 
 ## Carry out MCMC on the simulated data to get error estimates on the deconvolution.
