@@ -45,7 +45,7 @@ detach(package:MASS) #This will throw an error if MASS isn't already in the work
 Specify name of folder for results.
 ```{r}
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_testing_clean_code"
+intervention_length_name <- "_testing_clean_code_b"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -580,6 +580,72 @@ RL_inferred_plot_with_CI
 saveRDS(RL_inferred_plot_with_CI, sprintf("%s/RL_inferred_plot_with_CI.Rds", intervention_file_name))
 ggsave(sprintf("%s/RL_inferred_plot_with_CI.png", intervention_file_name))
 ```
+## Added 12/21/20
+
+```{r}
+all_inferred_df <- merge(shift_df, bayes_deconv_df)
+all_inferred_df %>%
+  ggplot() +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .7) + 
+  geom_line(aes(x = time, y = shift.median, col = "Median Infections, Shifted", lty = "Median Infections, Shifted", legend = "Median Infections, Shifted"), size = .6)  +
+  geom_ribbon(aes(x = time, ymin = shift.025, ymax = shift.975, fill = "95% CI, shifted", legend = "95% CI, shifted"), alpha = 0.4) +
+  geom_line(aes(x = time, y = inferred.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = .6)  +
+  geom_ribbon(aes(x = time, ymin = inferred.025, ymax = inferred.975, fill = "95% CI, inferred", legend = "95% CI, inferred"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = .5) +
+  scale_color_manual(values = c("black", "red", "blue", "black")) + 
+  scale_linetype_manual(values = c("dotted", "solid", "solid", "dotdash")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle('Shifting vs. RL inference of case counts') -> shift_RL_true_with_CI
+
+shift_RL_true_with_CI
+
+saveRDS(RL_inferred_plot_with_CI, sprintf("%s/shift_RL_true_with_CI.Rds", intervention_file_name))
+ggsave(sprintf("%s/shift_RL_true_with_CI.png", intervention_file_name))
+```
+
+
+
+
+```{r}
+shift_val <- ceiling(median(misspec_obs_delay_dist(10000000)))
+shifted_obs_cases <- sim_df$new_observed[shift_val:length(sim_df$new_observed)]
+
+inferred_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, u_obs_new, shifted_obs_cases[(obs_1-length(p)+1):obs_2])
+names(inferred_df) <- c('time', "new_inferred", 'shifted_obs_cases')
+#print(inferred_df)
+
+#Hack for fixing indexing of time variable to be consistent between dataframes
+inferred_df$time <- inferred_df$time - 2
+sim_df$time <- sim_df$time # + 2
+
+sim_df %>%
+  merge(inferred_df, by = 'time', all = 'TRUE')    %>%
+  as.tbl() %>%
+  pivot_longer(-time, names_to = "data_type", values_to = "count") %>% 
+  filter(data_type == "new_inferred"| data_type == "new_infected" | data_type == "new_observed" | data_type == "shifted_obs_cases") %>%
+  ggplot() +
+  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
+  geom_vline(aes(xintercept = parlist$intervention_time_1), linetype = "dotted") +
+  scale_linetype_manual(values=c("solid", "solid", "dotted", "solid")) + 
+  scale_color_manual(values = c("blue", "red", "green", "green")) +
+  labs(color = "Infections", linetype = "Infections") + 
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle(sprintf('Number of inferred cases from Richardson-Lucy')) -> inferred_plot
+
+inferred_plot
+
+saveRDS(inferred_plot, sprintf("%s/all-case-curves.Rds", intervention_file_name))
+ggsave(sprintf("%s/all-case-curves.png", intervention_file_name))
+
+```
+
+
+
+
+
 
 ## Additional work in various stages
 * Cutting off time series at different points and comparing inferred infection curves as observation interval becomes longer, for perfectly specified and misspecified delay distribution
