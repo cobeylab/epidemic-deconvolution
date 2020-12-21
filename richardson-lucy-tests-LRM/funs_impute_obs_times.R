@@ -5,10 +5,25 @@
 #Computes nn delays from infection to observation.
 #Distribution of time from infection to symptoms, hospitalization or death (depending on what is being observed) is lognormal distribution with parameters meanlog = mean of logarithm; stdlog = std of logarithm.
 #Distribution of time from symptoms/hospitalization/death to being recorded in the data is uniform on the interval [0, max_sym_to_obs]
+
 obs_delays <- function(nn, meanlog, stdlog, max_sym_to_obs = 2){
   incubation_vals <- rlnorm(nn, meanlog, stdlog)
   r_sym_to_obs <- runif(nn, min = 0, max = max_sym_to_obs)  # Delay from symptoms -> observation
   delays <- incubation_vals + r_sym_to_obs
+}
+
+obs_delays_with_uncertainty <- function(nn, this_mean, this_mean_std, this_std, this_std_std, this_max_sym_to_obs, this_max_sym_to_obs_std){
+  sample_means <- rnorm(nn, this_mean, this_mean_std)
+  sample_stds <- rnorm(nn, this_std, this_std_std)
+  sample_max_sym_to_obs <- rnorm(nn, this_max_sym_to_obs, this_max_sym_to_obs_std)
+  
+  # Using equations for "generation and parameters" from lognormal distribution wikipedia page
+  sample_meanlogs <- log(sample_means^2/sqrt(sample_means^2 + sample_stds^2))
+  sample_stdlogs <- log(1 + sample_stds^2/sample_means^2) 
+  sample_input <- data.frame("meanlogs" = sample_meanlogs, "stdlogs" = sample_stdlogs, "max_sym_to_obs" = sample_max_sym_to_obs)
+  
+  obs_delays_all <- apply(sample_input, 1, function(x){obs_delays(1, x[[1]], x[[2]], x[[3]])})
+  obs_delays_all
 }
 
 #' This function draws a random sample of size n from the delay distribution (the distribution of times from infection to case observation)

@@ -45,7 +45,7 @@ detach(package:MASS) #This will throw an error if MASS isn't already in the work
 Specify name of folder for results.
 ```{r}
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_testing_clean_code_b"
+intervention_length_name <- "_testing_clean_code_uncertainty"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -186,37 +186,56 @@ assumed_time_to_obs_std <- parlist$time_to_obs_std
 assumed_frac_sampled <- parlist$frac_sampled*parlist$frac_sampled_mean_mult
 assumed_frac_sampled_std <- parlist$frac_sampled_std
 
-# Using equations for "generation and parameters" from lognormal distribution wikipedia page
-assumed_meanlog <- log(assumed_mean^2/sqrt(assumed_mean^2 + assumed_std^2))
-assumed_stdlog <- log(1 + assumed_std^2/assumed_mean^2)
+# Using equations for "generation and parameters" from lognormal distribution wikipedia page; now built into obs_delays_with_uncertainty
+# assumed_meanlog <- log(assumed_mean^2/sqrt(assumed_mean^2 + assumed_std^2))
+# assumed_stdlog <- log(1 + assumed_std^2/assumed_mean^2)
 
 ```
 
 Compute the true delay distribution and plot.
 ```{r}
+init_true_delay_distr_vec <- tabulate(obs_delays_with_uncertainty(1000000, true_mean, 0, true_std, 0, true_time_to_obs,0))
+true_unnorm_delay_distr_vec <- ifelse(init_true_delay_distr_vec > 0, init_true_delay_distr_vec, 10^(-8)) #never 0; useful later
+true_delay_distr_vec <- true_unnorm_delay_distr_vec/sum(true_unnorm_delay_distr_vec) * true_frac_sampled
+
 # This is the delay distribution we use to do the inference (could be misspecified compared to the true delay distribution used to generate the data).
-init_delay_distr_vec <- tabulate(obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs))
+init_delay_distr_vec <- tabulate(obs_delays_with_uncertainty(1000000, assumed_mean, assumed_mean_std, assumed_std, assumed_std_std, assumed_time_to_obs, assumed_time_to_obs_std*100))
 unnorm_delay_distr_vec <- ifelse(init_delay_distr_vec > 0, init_delay_distr_vec, 10^(-8)) #never 0; useful later
 delay_distr_vec <- unnorm_delay_distr_vec/sum(unnorm_delay_distr_vec) * assumed_frac_sampled
 
 #len_diff <- length(sim_df$new_infected)-length(delay_distr_vec)
 
-delay_distr_plot_df <- data.frame("num_days" = 1:length(delay_distr_vec), "delay_distribution" = delay_distr_vec) #note that num_days starts with 1, not 0, because "tabulate" bins data beginning with 1. this means we have an implicit assumption that infections are never observed on the day when they occur, which is realistic.
+make_same_length <- function(v1, v2){
+  if(length(v1)<length(v2)){
+    v1fix <- c(v1, rep(0, length(v2)-length(v1)))
+    v2fix <- v2
+  } else{
+    v2fix <- c(v2, rep(0, length(v1)-length(v2)))
+    v1fix <- v1
+  }
+  list("v1" = v1fix, "v2" = v2fix)
+}
+
+same_len_distrs <- make_same_length(true_delay_distr_vec, delay_distr_vec)
+
+delay_distr_plot_df <- data.frame("num_days" = 1:length(same_len_distrs$v1), "true_delay_distribution" = same_len_distrs$v1, "assumed_delay_distribution" = same_len_distrs$v2) #note that num_days starts with 1, not 0, because "tabulate" bins data beginning with 1. this means we have an implicit assumption that infections are never observed on the day when they occur, which is realistic.
 
 delay_distr_plot_df %>% 
   ggplot() +
-  geom_point(aes(x = num_days, y = delay_distr_vec, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = 1)  +
-  geom_line(aes(x = num_days, y = delay_distr_vec, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = 1.1)  +
-  scale_color_manual(values = c("black")) + 
-  scale_linetype_manual(values = c("solid")) +
+  geom_point(aes(x = num_days, y = true_delay_distribution, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = 1)  +
+  geom_line(aes(x = num_days, y = true_delay_distribution, col = "True delay distribution", lty = "True delay distribution", legend = "True delay distribution"), size = .7)  +
+  geom_point(aes(x = num_days, y = delay_distr_vec, col = "Assumed delay distribution", lty = "Assumed delay distribution", legend = "Assumed delay distribution"), size = 1)  +
+  geom_line(aes(x = num_days, y = delay_distr_vec, col = "Assumed delay distribution", lty = "Assumed delay distribution", legend = "Assumed delay distribution"), size = .7)  +
+  scale_color_manual(values = c("black", "blue")) + 
+  scale_linetype_manual(values = c("solid", "dotted")) +
   labs(linetype = "", colour = "", fill = "") +
   ylab("number of days")+
   xlab("probability density") + 
-  ggtitle('True delay distribution') -> true_delay_distribution_plot
-true_delay_distribution_plot
+  ggtitle('True and assumed delay distributions') -> delay_distribution_plot
+delay_distribution_plot
 
-saveRDS(true_delay_distribution_plot, sprintf("%s/true_delay_distribution_plot.Rds", intervention_file_name))
-ggsave(sprintf("%s/true_delay_distribution_plot.png", intervention_file_name))
+saveRDS(delay_distribution_plot, sprintf("%s/delay_distribution_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/delay_distribution_plot.png", intervention_file_name))
 
 rm(init_delay_distr_vec)
 rm(unnorm_delay_distr_vec)
