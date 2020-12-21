@@ -5,7 +5,7 @@ output: html_notebook
 
 Deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 11-24-2020
+Last updated: 12-21-2020
 
 
 ## Introduction
@@ -82,18 +82,18 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       delay_distr_std = 5, 
       time_to_obs = 2, #people appear in data at most two days after they die [uniformly distributed between 0 and 2]
       frac_sampled = 1, #everybody who dies must appear in the data in order to compare to EpiNow2
-### Observations - uncertainty in delay and undersampling ###
-      delay_distr_mean_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the mean of the delay distribution - test with each value
-      delay_distr_std_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the std of the delay distribution - test with each value
-      time_to_obs_std_vec = c(0, .1, .5, 1), #the percent uncertainty in the time to observation of the delay distribution - test with each value
-      frac_sampled_std_vec = c(0, .05, .1), #the percent uncertainty in the fraction sampled - test with each value
-### Misspecification in observation distributions ###
-      delay_distr_mean_mult_vec = c(.5, .8, 1, 1.2, 1.8), #multipliers for how much to misspecify delay distribution mean - test with each value
-      delay_distr_std_mult_vec = c(.5, .8, 1, 1.2, 1.8), #multipliers for how much to misspecy delay distribution std - test with each value
-      frac_sampled_mean_mult_vec = c(.8, .9, 1, 1.1, 1.2), #multipliers for how much to misspecify fraction sampled - test with each value
-      time_to_obs_mult = c(1), #multipliers for how much to misspecify time to observation - test with each value - here, no misspecification on time to observation
+### Observations - uncertainty in delay and undersampling. A value of 0 means no uncertainty. ###
+      delay_distr_mean_std = .1, #the percent uncertainty in the mean of the delay distribution - specify a single value
+      delay_distr_std_std = .1, #the percent uncertainty in the std of the delay distribution - specify a single value
+      time_to_obs_std = 0, #the percent uncertainty in the time to observation of the delay distribution - specify a single value
+      frac_sampled_std = 0, #the percent uncertainty in the fraction sampled - specify a single value
+### Misspecification in observation distributions. A value of 1 means no misspecification. ###
+      delay_distr_mean_mult = 1.1, #multiplier for how much to misspecify delay distribution mean - specify a single value
+      delay_distr_std_mult = 1.1, #multiplier for how much to misspecy delay distribution std - specify a single value
+      frac_sampled_mean_mult = 1, #multiplier for how much to misspecify fraction sampled - specify a single value
+      time_to_obs_mult = 1, #multiplier for how much to misspecify time to observation - specify a single value
 ### Parameters for Bayesian RL inference
-      max_RL_it = 15, #for computing EM in deconvolution
+      max_RL_it = 10, #for computing EM in deconvolution
       max_N_RL_MCMC = 10000, #for now; it would be better to check for convergence instead of just setting a max
       burn_in_RL_MCMC = 500,
 ### Methods for carrying out the inference of infections from observations - not currently implemented ###
@@ -173,11 +173,18 @@ Define the parameters we will use to do the inference, which may be misspecified
 ```{r}
 # The parameters named "assumed_" are the values used to do the inference from times of observation to times of infection, 
 # which may be misspecified compared to the true values that were used to generate times of observation from times of infection.
-# For now, the assumed_ values are just equal to the true_ values
-assumed_mean <- parlist$delay_distr_mean
-assumed_std <- parlist$delay_distr_std
-assumed_time_to_obs <- parlist$time_to_obs
-assumed_frac_sampled <- parlist$frac_sampled
+# For now, the assumed_ values are just equal to the true_ values; i.e., have not implemented misspecification in this notebook
+assumed_mean <- parlist$delay_distr_mean*parlist$delay_distr_mean_mult
+assumed_mean_std <- parlist$delay_distr_mean_std
+
+assumed_std <- parlist$delay_distr_std*parlist$delay_distr_std_mult
+assumed_std_std <- parlist$delay_distr_std_std
+
+assumed_time_to_obs <- parlist$time_to_obs*parlist$time_to_obs_mult
+assumed_time_to_obs_std <- parlist$time_to_obs_std
+
+assumed_frac_sampled <- parlist$frac_sampled*parlist$frac_sampled_mean_mult
+assumed_frac_sampled_std <- parlist$frac_sampled_std
 
 # Using equations for "generation and parameters" from lognormal distribution wikipedia page
 assumed_meanlog <- log(assumed_mean^2/sqrt(assumed_mean^2 + assumed_std^2))
