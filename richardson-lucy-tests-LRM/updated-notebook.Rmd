@@ -5,7 +5,7 @@ output: html_notebook
 
 Deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 12-21-2020
+Last updated: 12-22-2020
 
 
 ## Introduction
@@ -45,7 +45,7 @@ detach(package:MASS) #This will throw an error if MASS isn't already in the work
 Specify name of folder for results.
 ```{r}
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_testing_clean_code_uncertainty"
+intervention_length_name <- "_testing_clean_code_uncertainty_highly_misspecified"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -83,14 +83,14 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       time_to_obs = 2, #people appear in data at most two days after they die [uniformly distributed between 0 and 2]
       frac_sampled = 1, #everybody who dies must appear in the data in order to compare to EpiNow2
 ### Observations - uncertainty in delay and undersampling. A value of 0 means no uncertainty. ###
-      delay_distr_mean_std = .1, #the percent uncertainty in the mean of the delay distribution - specify a single value
-      delay_distr_std_std = .1, #the percent uncertainty in the std of the delay distribution - specify a single value
+      delay_distr_mean_std = .5, #the percent uncertainty in the mean of the delay distribution - specify a single value
+      delay_distr_std_std = .5, #the percent uncertainty in the std of the delay distribution - specify a single value
       time_to_obs_std = 0, #the percent uncertainty in the time to observation of the delay distribution - specify a single value
       frac_sampled_std = 0, #the percent uncertainty in the fraction sampled - specify a single value
 ### Misspecification in observation distributions. A value of 1 means no misspecification. ###
-      delay_distr_mean_mult = 1.1, #multiplier for how much to misspecify delay distribution mean - specify a single value
-      delay_distr_std_mult = 1.1, #multiplier for how much to misspecy delay distribution std - specify a single value
-      frac_sampled_mean_mult = 1, #multiplier for how much to misspecify fraction sampled - specify a single value
+      delay_distr_mean_mult = 1.8, #multiplier for how much to misspecify delay distribution mean - specify a single value
+      delay_distr_std_mult = 1.8, #multiplier for how much to misspecy delay distribution std - specify a single value
+      frac_sampled_mean_mult = 1.2, #multiplier for how much to misspecify fraction sampled - specify a single value
       time_to_obs_mult = 1, #multiplier for how much to misspecify time to observation - specify a single value
 ### Parameters for Bayesian RL inference
       max_RL_it = 10, #for computing EM in deconvolution
@@ -199,7 +199,7 @@ true_unnorm_delay_distr_vec <- ifelse(init_true_delay_distr_vec > 0, init_true_d
 true_delay_distr_vec <- true_unnorm_delay_distr_vec/sum(true_unnorm_delay_distr_vec) * true_frac_sampled
 
 # This is the delay distribution we use to do the inference (could be misspecified compared to the true delay distribution used to generate the data).
-init_delay_distr_vec <- tabulate(obs_delays_with_uncertainty(1000000, assumed_mean, assumed_mean_std, assumed_std, assumed_std_std, assumed_time_to_obs, assumed_time_to_obs_std*100))
+init_delay_distr_vec <- tabulate(obs_delays_with_uncertainty(1000000, assumed_mean, assumed_mean_std, assumed_std, assumed_std_std, assumed_time_to_obs, assumed_time_to_obs_std))
 unnorm_delay_distr_vec <- ifelse(init_delay_distr_vec > 0, init_delay_distr_vec, 10^(-8)) #never 0; useful later
 delay_distr_vec <- unnorm_delay_distr_vec/sum(unnorm_delay_distr_vec) * assumed_frac_sampled
 
@@ -246,7 +246,7 @@ rm(unnorm_delay_distr_vec)
 Create a dataframe with the true epidemic curve and curve of observed cases using the true delay distribution.
 ```{r, echo=FALSE}
 true_delay_fn <- function(nn) {
-  obs_delays(nn, true_meanlog, true_stdlog)
+  obs_delays_with_uncertainty(nn, true_mean, 0, true_std, 0, true_time_to_obs,0)
 }
 
 sim_df <- stoch_df() %>%
@@ -274,17 +274,19 @@ new_obs_no_na <- ifelse(is.na(sim_df$new_observed), 0, sim_df$new_observed) #thi
 To be added: uncertainty if the median of the delay distribution or fraction of undersampling are assumed to be uncertain.
 
 ```{r}
-one_shifted_curve <- function(observed_cases, vec_of_delays) {
+one_shifted_curve <- function(observed_cases, vec_of_delays, frac_observed) {
   shift_val <- ceiling(median(vec_of_delays))
-  frac_not_observed <- min(length(vec_of_delays[vec_of_delays > parlist$n_t])/length(vec_of_delays), 1-0.01*1/length(vec_of_delays)) #can't be true that fraction of not observed is exactly 1; this is a pathological case anyway
-  observed_cases[shift_val:length(observed_cases)]*(1/(1-frac_not_observed))
+  observed_cases[shift_val:length(observed_cases)]*(1/frac_observed)
 }
 
 get_samples_shifting_method <- function(observed_cases, n_delay_samples) {
   infection_curve_samples <- matrix(nrow = n_delay_samples, ncol = length(observed_cases))
   for (curve_count in 1:n_delay_samples) {
-    vec_of_delays <- obs_delays(1000000, assumed_meanlog, assumed_stdlog, assumed_time_to_obs)
-    next_curve <- one_shifted_curve(observed_cases, vec_of_delays)
+    frac_observed_sample <- rnorm(1, assumed_frac_sampled, assumed_frac_sampled_std)
+    this_vec_of_delays <- obs_delays_with_uncertainty(length(observed_cases), assumed_mean, assumed_mean_std, assumed_std, assumed_std_std, assumed_time_to_obs, assumed_time_to_obs_std)
+    print(median(this_vec_of_delays))
+    print(var(this_vec_of_delays))
+    next_curve <- one_shifted_curve(observed_cases, this_vec_of_delays, frac_observed_sample)
     infection_curve_samples[curve_count,] <- c(next_curve, rep(0, length(observed_cases) - length(next_curve)))
   }
   return(infection_curve_samples)
@@ -294,7 +296,7 @@ get_95_CI_shifting_method <- function(infection_curve_samples) {
   colQuantiles(infection_curve_samples, probs = c(.025, .5, .975))
 }
 
-inf_curve_samples <- get_samples_shifting_method(sim_df$new_observed, 100)
+inf_curve_samples <- get_samples_shifting_method(sim_df$new_observed, 50)
 shift_CI <- get_95_CI_shifting_method(inf_curve_samples)
 #shift_CI
 
@@ -308,12 +310,12 @@ shift_df <- data.frame("time" = 1:length(shift_CI[,1]), "shift.025" = shift_CI[,
 
 shift_df %>%
   ggplot() +
-  geom_line(aes(x = time, y = shift.median, col = "Median Infections, Shifted", lty = "Median Infections, Shifted", legend = "Median Infections, Shifted"), size = .8)  +
-  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .8) + 
+  geom_line(aes(x = time, y = shift.median, col = "Median Infections, Shifted", lty = "Median Infections, Shifted", legend = "Median Infections, Shifted"), size = .6)  +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .6) + 
   geom_ribbon(aes(x = time, ymin = shift.025, ymax = shift.975, fill = "95% CI", legend = "95% CI"), alpha = 0.4) +
   geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = 1.1) +
   scale_color_manual(values = c("black", "red", "blue")) + 
-  scale_linetype_manual(values = c("dotted", "solid", "longdash")) +
+  scale_linetype_manual(values = c("dotted", "longdash", "solid")) +
   labs(linetype = "", colour = "", fill = "") +
   ylab("count")+
   xlab("time (days)") + 
@@ -347,11 +349,11 @@ To be clear, the first day of observation is day $5$, the final day of observati
 In this code I assume we don't start observing until after a time equal to the length of the delay distribution has passed. 
 In the list of parameters, instead of specifying the first day we observe directly, I define
 Here, we use the variable 
-```{r}
+```
 obs_1_offset
 ```
 such that the first day of observation is 
-```{r}
+```
 obs_1_offset + length(p) + 1
 ```
 An obs_1_offset of zero would thus correspond to day length(p)+1: we start on the day after length(p).
@@ -405,7 +407,7 @@ $$ \begin{bmatrix}
   p1 & p2 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & p0 \\ 
   \end{bmatrix} $$ 
 so if we take 
-```{r}
+```
   t(p_ij_obs[1:7, (5-3+1):7])
 ```
 we obtain $\hat{P}$. Here, $7$=length($\vec{u}$)= length($\vec{d}$)+length($\vec{p})-1$, $5-3+1 = \text{obs_1_offset + } 2$. 
@@ -630,45 +632,6 @@ shift_RL_true_with_CI
 saveRDS(RL_inferred_plot_with_CI, sprintf("%s/shift_RL_true_with_CI.Rds", intervention_file_name))
 ggsave(sprintf("%s/shift_RL_true_with_CI.png", intervention_file_name))
 ```
-
-
-
-
-```{r}
-shift_val <- ceiling(median(misspec_obs_delay_dist(10000000)))
-shifted_obs_cases <- sim_df$new_observed[shift_val:length(sim_df$new_observed)]
-
-inferred_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, u_obs_new, shifted_obs_cases[(obs_1-length(p)+1):obs_2])
-names(inferred_df) <- c('time', "new_inferred", 'shifted_obs_cases')
-#print(inferred_df)
-
-#Hack for fixing indexing of time variable to be consistent between dataframes
-inferred_df$time <- inferred_df$time - 2
-sim_df$time <- sim_df$time # + 2
-
-sim_df %>%
-  merge(inferred_df, by = 'time', all = 'TRUE')    %>%
-  as.tbl() %>%
-  pivot_longer(-time, names_to = "data_type", values_to = "count") %>% 
-  filter(data_type == "new_inferred"| data_type == "new_infected" | data_type == "new_observed" | data_type == "shifted_obs_cases") %>%
-  ggplot() +
-  geom_line(aes(x = time, y = count, color = data_type, linetype = data_type)) + 
-  geom_vline(aes(xintercept = parlist$intervention_time_1), linetype = "dotted") +
-  scale_linetype_manual(values=c("solid", "solid", "dotted", "solid")) + 
-  scale_color_manual(values = c("blue", "red", "green", "green")) +
-  labs(color = "Infections", linetype = "Infections") + 
-  ylab("count")+
-  xlab("time (days)") + 
-  ggtitle(sprintf('Number of inferred cases from Richardson-Lucy')) -> inferred_plot
-
-inferred_plot
-
-saveRDS(inferred_plot, sprintf("%s/all-case-curves.Rds", intervention_file_name))
-ggsave(sprintf("%s/all-case-curves.png", intervention_file_name))
-
-```
-
-
 
 
 
