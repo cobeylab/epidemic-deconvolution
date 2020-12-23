@@ -5,7 +5,7 @@ output: html_notebook
 
 Deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 12-22-2020
+Last updated: 12-23-2020
 
 
 ## Introduction
@@ -408,7 +408,7 @@ $$ \begin{bmatrix}
   \end{bmatrix} $$ 
 so if we take 
 ```
-  t(p_ij_obs[1:7, (5-3+1):7])
+t(p_ij_obs[1:7, (5-3+1):7])
 ```
 we obtain $\hat{P}$. Here, $7$=length($\vec{u}$)= length($\vec{d}$)+length($\vec{p})-1$, $5-3+1 = \text{obs_1_offset + } 2$. 
 Note that the $1$-D deconvolution problem is $\textit{always}$ of this form; so we can think of the Richardson-Lucy algorithm as a way of estimating $\vec{u}$ given this underdetermined linear system. 
@@ -611,7 +611,10 @@ ggsave(sprintf("%s/RL_inferred_plot_with_CI.png", intervention_file_name))
 ## Added 12/21/20
 
 ```{r}
-all_inferred_df <- merge(shift_df, bayes_deconv_df)
+all_inferred_df <- merge(shift_df, bayes_deconv_df, by = c("time", "true"))
+all_inferred_df <- all_inferred_df[order(all_inferred_df$time),]
+all_inferred_df
+
 all_inferred_df %>%
   ggplot() +
   geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .7) + 
@@ -633,8 +636,55 @@ saveRDS(RL_inferred_plot_with_CI, sprintf("%s/shift_RL_true_with_CI.Rds", interv
 ggsave(sprintf("%s/shift_RL_true_with_CI.png", intervention_file_name))
 ```
 
+## Added 12/22/20
+
+```{r}
+diff_frac_shifted <- (all_inferred_df$shift.median-all_inferred_df$true)/all_inferred_df$true
+diff_frac_RL <- (all_inferred_df$inferred.median-all_inferred_df$true)/all_inferred_df$true
+
+diff_frac_shifted_top <- (all_inferred_df$shift.975-all_inferred_df$true)/all_inferred_df$true
+diff_frac_shifted_bottom <- (all_inferred_df$shift.025-all_inferred_df$true)/all_inferred_df$true
+
+diff_frac_RL_top <- (all_inferred_df$inferred.975-all_inferred_df$true)/all_inferred_df$true
+diff_frac_RL_bottom <- (all_inferred_df$inferred.025-all_inferred_df$true)/all_inferred_df$true
+
+diff_frac_df <- data.frame(c(obs_1 - length(p) + 1):obs_2, diff_frac_shifted_bottom, diff_frac_shifted, diff_frac_shifted_top, diff_frac_RL_bottom, diff_frac_RL, diff_frac_RL_top)
+names(diff_frac_df) <- c('time', "diff_frac_shifted.025", "diff_frac_shifted.median", "diff_frac_shifted.975", "diff_frac_RL.025", "diff_frac_RL.median", "diff_frac_RL.975")
+
+diff_frac_df %>%
+  ggplot() +
+  geom_line(aes(x = time, y = diff_frac_shifted, col = "Median Infections, Shifted", lty = "Median Infections, Shifted", legend = "Median Infections, Shifted"), size = .6)  +
+  geom_ribbon(aes(x = time, ymin = diff_frac_shifted.025, ymax = diff_frac_shifted.975, fill = "95% CI, shifted", legend = "95% CI, shifted"), alpha = 0.4) +
+  geom_line(aes(x = time, y = diff_frac_RL.median, col = "Median Infections, Inferred", lty = "Median Infections, Inferred", legend = "Median Infections, Inferred"), size = .6)  +
+  geom_ribbon(aes(x = time, ymin = diff_frac_RL.025, ymax = diff_frac_RL.975, fill = "95% CI, inferred", legend = "95% CI, inferred"), alpha = 0.4) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = .5) +
+  scale_color_manual(values = c("black", "red", "blue", "black")) + 
+  scale_linetype_manual(values = c("dotted", "solid", "solid", "dotdash")) +
+  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") +
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-1, 5)) + 
+  ggtitle('Shifting vs. RL inference of case counts, fractional error') -> shift_RL_fractional_difference_with_CI
+
+shift_RL_fractional_difference_with_CI
+
+saveRDS(shift_RL_fractional_difference_with_CI, sprintf("%s/shift_RL_fractional_difference_with_CI.Rds", intervention_file_name))
+ggsave(sprintf("%s/shift_RL_fractional_difference_with_CI.png", intervention_file_name))
+
+```
 
 
+
+```{r}
+
+plot_grid(shift_RL_true_with_CI, shift_RL_fractional_difference_with_CI, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+
+all_plot
+
+saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/all_plot.png", intervention_file_name))
+
+```
 
 ## Additional work in various stages
 * Cutting off time series at different points and comparing inferred infection curves as observation interval becomes longer, for perfectly specified and misspecified delay distribution
