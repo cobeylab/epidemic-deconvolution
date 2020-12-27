@@ -686,6 +686,124 @@ ggsave(sprintf("%s/all_plot.png", intervention_file_name))
 
 ```
 
+## Added 12/23/20: $R_t$ calculation
+
+```{r}
+## Output cori estimate with mean, CI and times given an input df, and the name of the incidence column
+# Note that here, we're using the option that samples over serial intervals and std of serial intervals
+get_cori <- function(df.in, 
+                     icol_name, 
+                     out_name = 'Cori',
+                     window = 1, 
+                     #SI_mean=parlist$true_mean_SI, 
+                     #SI_var=2*(parlist$true_mean_SI/2)^2,
+                     SI_mean=4, 
+                     SI_var=2*(4/2)^2,
+                     wend = TRUE){
+  idat <- df.in %>%
+    filter(get(icol_name) > 0 & !is.na(get(icol_name))) %>%
+    complete(time = 2:max(time))%>%
+    mutate_all(.funs = function(xx){ifelse(is.na(xx), 0, xx)})
+  
+  ts <- idat$time
+  ts <- ts[ts > 1 & ts < (max(ts)-window+1)]
+  te<- ts+(window-1)
+  
+  estimate_R(
+    incid = pull(idat, eval(icol_name)),
+    method = "parametric_si",
+    config = make_config(
+      list(
+        mean_si = SI_mean,
+        #min_mean_si = SI_mean -1,
+        #max_mean_si = SI_mean + 1,
+        #std_mean_si = 1.5,
+        #std_std_si = 1.5,
+        std_si = sqrt(SI_var),
+        #min_std_si = sqrt(SI_var)*.8,
+        #max_std_si = sqrt(SI_var)*1.2,
+        #n1 = 50,
+        #n2 = 100, 
+        t_start=ts,
+        t_end=te
+        )
+      )
+    ) -> outs
+  
+  outs
+  
+  outs$R %>%
+    mutate(time = if(wend == TRUE) t_end else ceiling((t_end+t_start)/2) ) %>%
+    dplyr::select(time, `Mean(R)`, `Quantile.0.025(R)`, `Quantile.0.975(R)`) %>%
+    setNames(c('time', paste0(out_name, '.mean'), paste0(out_name, '.025'), paste0(out_name, '.975')))
+}
+```
+
+```{r}
+all_u_df <- data.frame("time" = all_inferred_df$time, "true" = all_inferred_df$true, "count_val" = t(all_u[seq(8000, 10000, 50),]))
+dim(all_u_df)
+
+all_u_df_names <- names(all_u_df)
+all_u_df_names_counts <- names()
+
+get_cori_all_u <- function(df_column){
+  this_name <- name(df_column)
+  get_cori(all_u_df, icol_name = this_name)
+}
+
+get_cori_all_inferred <- function(df_column){
+  this_name <- name(df_column)
+  get_cori(all_inferred_df, name = this_name)
+}
+
+all_u_df_counts <- select(all_u_df, num_range("X", 1:dim(all_u_df)[1]))
+all_u_df_cori <-  lapply(all_u_df_names, function(x){get_cori(df.in = all_u_df, icol_name = x)})
+  select(everything())
+
+cori_df <- get_cori(df.in = all_u_df, icol_name = "count_val.7")
+
+cori_df
+
+cori_inferred <- get_cori(df.in = all_inferred_df, icol_name = "inferred.median")
+cori_inferred
+
+#select(starts_with())
+#mutate()
+#apply()
+#num_range
+```
+
+```{r}
+all_cori_df <- merge(cori_df, cori_inferred, by = "time")
+r0_df <- stoch_df()
+merge(all_cori_df, r0_df, by = "time") -> new_all_df
+
+new_all_df %>%
+  filter(!is.na(Cori.mean.x) & !is.na(Cori.mean.y) & Cori.mean.y < 5 & Cori.975.y < 8) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "one", color = "one")) + 
+  geom_line(aes(x = time, y = true_r0, color = "true_Rt", linetype = "true_Rt"), size = 1) +
+  geom_line(aes(x = time, y = Cori.mean.x, color = "true_infections", linetype = "true_infections")) + 
+  geom_line(aes(x = time, y = Cori.mean.y, color = "inferred_infections", linetype = "inferred_infections")) +
+  geom_ribbon(aes(x = time, ymin=Cori.025.x, ymax = Cori.975.x, fill = "true_infections"), alpha=0.3, show.legend = FALSE) + 
+  geom_ribbon(aes(x = time, ymin=Cori.025.y, ymax = Cori.975.y, fill = "inferred_infections"), alpha=0.3, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) + 
+  scale_linetype_manual(values=c("solid", "dotted", "dashed", "solid", "solid")) + 
+  scale_color_manual(values = c("red", "black", "black", "blue", "black")) +
+  scale_fill_manual(values = c("red", "blue")) +
+ # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') -> new_all_plot
+
+new_all_plot
+
+ggsave(sprintf("%s/rt_plot.png", intervention_file_name))
+```
+
+
+
 ## Additional work in various stages
 * Cutting off time series at different points and comparing inferred infection curves as observation interval becomes longer, for perfectly specified and misspecified delay distribution
 * Pipeline for taking into account uncertainty in delay distribution by defining a prior on the mean and variance and bootstrapping
