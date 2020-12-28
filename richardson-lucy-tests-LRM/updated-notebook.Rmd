@@ -743,55 +743,134 @@ get_cori <- function(df.in,
 all_u_df <- data.frame("time" = all_inferred_df$time, "true" = all_inferred_df$true, "count_val" = t(all_u[seq(8000, 10000, 50),]))
 dim(all_u_df)
 
-all_u_df_names <- names(all_u_df)
-all_u_df_names_counts <- names()
+all_u_df_counts <- dplyr::select(all_u_df, starts_with("count"))
+apply(all_u_df_counts, 2, function(x){print(x)})
+all_u_df_cori <-  lapply(names(all_u_df_counts), function(x){get_cori(df.in = all_u_df, icol_name = x)})
 
-get_cori_all_u <- function(df_column){
-  this_name <- name(df_column)
-  get_cori(all_u_df, icol_name = this_name)
-}
-
-get_cori_all_inferred <- function(df_column){
-  this_name <- name(df_column)
-  get_cori(all_inferred_df, name = this_name)
-}
-
-all_u_df_counts <- select(all_u_df, num_range("X", 1:dim(all_u_df)[1]))
-all_u_df_cori <-  lapply(all_u_df_names, function(x){get_cori(df.in = all_u_df, icol_name = x)})
-  select(everything())
-
-cori_df <- get_cori(df.in = all_u_df, icol_name = "count_val.7")
-
-cori_df
-
-cori_inferred <- get_cori(df.in = all_inferred_df, icol_name = "inferred.median")
-cori_inferred
-
-#select(starts_with())
-#mutate()
-#apply()
-#num_range
+cori_shifted <- get_cori(df.in = all_inferred_df, icol_name = "shift.median") #actually want to apply to a bunch of samples from the shifted time series distribution, similar to the all_u example which is sampling from the bayesian time series distribution
+cori_true <- get_cori(df.in = all_inferred_df, icol_name = "true")
+```
+```{r}
+all_u_df_cori_bound <- bind_rows(all_u_df_cori, .id="sample_num")
+all_u_df_cori_bound$sample_num <- as.factor(as.integer(all_u_df_cori_bound$sample_num))
+all_u_df_cori_bound$time <- as.numeric(all_u_df_cori_bound$time)
 ```
 
 ```{r}
-all_cori_df <- merge(cori_df, cori_inferred, by = "time")
-r0_df <- stoch_df()
-merge(all_cori_df, r0_df, by = "time") -> new_all_df
-
-new_all_df %>%
-  filter(!is.na(Cori.mean.x) & !is.na(Cori.mean.y) & Cori.mean.y < 5 & Cori.975.y < 8) %>%
+all_u_df_cori_bound %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) %>%
   ggplot() + 
-  geom_hline(aes(yintercept = 1, linetype = "one", color = "one")) + 
-  geom_line(aes(x = time, y = true_r0, color = "true_Rt", linetype = "true_Rt"), size = 1) +
-  geom_line(aes(x = time, y = Cori.mean.x, color = "true_infections", linetype = "true_infections")) + 
-  geom_line(aes(x = time, y = Cori.mean.y, color = "inferred_infections", linetype = "inferred_infections")) +
-  geom_ribbon(aes(x = time, ymin=Cori.025.x, ymax = Cori.975.x, fill = "true_infections"), alpha=0.3, show.legend = FALSE) + 
-  geom_ribbon(aes(x = time, ymin=Cori.025.y, ymax = Cori.975.y, fill = "inferred_infections"), alpha=0.3, show.legend = FALSE) +
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_line(aes(x = time, y = Cori.mean, color = "Sample Rt", linetype = "Sample Rt")) +
+  geom_ribbon(aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Sample Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("dotted", "dashed", "solid")) + 
+  scale_color_manual(values = c("black", "black", "red")) +
+  scale_fill_manual(values = c("red")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') ->all_u_df_cori_plot
+
+all_u_df_cori_plot
+
+ggsave(sprintf("%s/all_u_df_cori_plot.png", intervention_file_name))
+```
+```{r}
+cori_shifted %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_line(aes(x = time, y = Cori.mean, color = "Shifted cases Rt", linetype = "Sample Rt")) +
+  geom_ribbon(aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Shifted cases Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("dotted", "dashed", "solid")) + 
+  scale_color_manual(values = c("black", "black", "blue")) +
+  scale_fill_manual(values = c("blue")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') ->cori_shifted_plot
+
+cori_shifted_plot
+
+ggsave(sprintf("%s/cori_shifted_plot.png", intervention_file_name))
+```
+```{r}
+cori_true %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_line(aes(x = time, y = Cori.mean, color = "True infections Rt", linetype = "True infections Rt")) +
+  geom_ribbon(aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "True infections Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("dotted", "dashed", "solid")) + 
+  scale_color_manual(values = c("black", "black", "black")) +
+  scale_fill_manual(values = c("black")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') ->cori_true_plot
+
+cori_true_plot
+
+ggsave(sprintf("%s/cori_true_plot.png", intervention_file_name))
+```
+```{r}
+all_u_df_cori_bound  %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) -> all_u_df_cori_bound_filtered
+cori_shifted %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) -> cori_shifted_filtered
+cori_true %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean)) -> cori_true_filtered
+
+ggplot() +
+  geom_line(all_u_df_cori_bound_filtered, mapping = aes(x = time, y = Cori.mean, color = "Sample Rt", linetype = "Sample Rt")) +
+  geom_ribbon(all_u_df_cori_bound_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Sample Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_line(cori_shifted_filtered, mapping = aes(x = time, y = Cori.mean, color = "Shifted cases Rt", linetype = "Sample Rt")) +
+  geom_ribbon(cori_shifted_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Shifted cases Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_line(cori_true_filtered, mapping = aes(x = time, y = Cori.mean, color = "True infections Rt", linetype = "True infections Rt")) +
+  geom_ribbon(cori_true_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "True infections Rt"), alpha=0.4, show.legend = FALSE) +
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("dotted", "dashed", "solid", "solid", "solid")) + 
+  scale_color_manual(values = c("black", "black", "red", "blue", "black")) +
+  scale_fill_manual(values = c("red", "blue", "black")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') ->all_cori_plot
+
+all_cori_plot
+```
+
+```{r}
+all_cori_df <- bind_rows(all_u_df_cori, cori_shifted, cori_true, .id="sample_num")
+all_cori_df$sample_num <- as.factor(all_cori_df$sample_num)
+all_cori_df$time <- as.numeric(all_cori_df$time)
+all_cori_df
+```
+
+```{r}
+all_cori_df %>%
+  filter(!is.na(Cori.mean) & !is.na(Cori.mean) & Cori.mean < 5 & Cori.975 < 8) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "one", color = "one")) +
+  geom_line(aes(x = time, y = Cori.mean, color = sample_num, linetype = sample_num)) +
+  geom_ribbon(aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = sample_num), alpha=0.3, show.legend = FALSE) +
   geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) + 
-  scale_linetype_manual(values=c("solid", "dotted", "dashed", "solid", "solid")) + 
-  scale_color_manual(values = c("red", "black", "black", "blue", "black")) +
-  scale_fill_manual(values = c("red", "blue")) +
- # scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  #scale_linetype_manual(values=c("solid", "dotted", "dashed", "solid", "solid")) + 
+  #scale_color_manual(values = c("red", "black", "black", "blue", "black")) +
+  #scale_fill_manual(values = c("red", "blue")) +
+  scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
   labs(color = "Legend", linetype = "Legend", fill = "Legend") +
   xlab("time (days)") + 
   ylab("Rt") +
