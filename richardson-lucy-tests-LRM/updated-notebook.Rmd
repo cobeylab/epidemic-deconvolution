@@ -520,13 +520,14 @@ sample_lambda_given_u_b <- function (A, b, u, lambda, beta, alpha, ref_u) {
 
 
 Compute the RL curve and then carry out the sampling. 
+* 12/29/20: Changed get_samples_RL_method to allow input of observation times instead of always using parlist, with parlist values still the defaults
 ```{r}
-get_samples_RL_method <- function(obs_curve, delay_vec){
+get_samples_RL_method <- function(obs_curve, delay_vec, obs_1_offset = parlist$obs_1_offset, obs_2_offset = parlist$obs_2_offset){
   p <- RL_delay(delay_vec) #delay distribution vector - notation in keeping with previous notation. this changes the delays to be indexed from 0.
     
   #note: obs_1 must be at least length(p) in this formulation.
-  obs_1 <- length(p)+parlist$obs_1_offset +1
-  obs_2 <- obs_1 + parlist$obs_2_offset
+  obs_1 <- length(p)+obs_1_offset +1
+  obs_2 <- obs_1 + obs_2_offset
   obs_dat <- obs_curve[obs_1:obs_2] #previously known as d_obs
   
   conv_matrix <- RL_conv_matrix(p, obs_1, obs_2) #toeplitz matrix for carrying out convolution was defined in RL section of code
@@ -959,6 +960,118 @@ cori_true_list_bound %>%
 However, it may be that cutting off the \emph{case counts} before doing the backcalculation will change the \emph{inferred curve} of infections (using RL, for example). For example, this may be the case if the delay distribution is misspecified.
 In this case, $R_t$ would certainly depend on when we cut off the time series, as the curve of infections we feed into the Cori method would depend on where we cut off the time series.
 We test this idea below.
+
+```{r}
+sim_df$new_observed
+#all_u <- get_samples_RL_method(sim_df$new_observed, delay_distr_vec)
+
+all_obs_df <- dplyr::select(sim_df, c("time","new_observed"))
+all_obs_df
+
+
+
+t_seq <- seq(3*(length(delay_distr_vec)+1), parlist$intervention_time_2, 100) #four values of t_seq, starting with a sequence that's long enough to run in bayesian function
+length(t_seq)
+t_seq
+
+all_obs_df$time <- as.numeric(all_obs_df$time)
+```
+
+
+```{r}
+cut_off_time <- function(df, t_fin){
+  df %>%
+    filter(time < t_fin) -> df_cutoff
+  #names(df_cutoff)[names(df_cutoff) == "true"] <- sprintf("true.%s", t_fin)
+  df_cutoff
+}
+
+all_obs_cutoff_list <- lapply(t_seq, function(x){cut_off_time(all_obs_df, x)})
+#all_obs_cutoff_list  
+```
+
+```{r}
+#plot(delay_distr_vec)
+#length(delay_distr_vec)
+#dftest <- data.frame(all_obs_cutoff_list[1])
+#dftest$new_observed[dftest$new_observed > 1]
+#test_samples<-get_samples_RL_method(sim_df$new_observed[1:190], delay_distr_vec) #for some reason which I'm not sure of right now, the new_observed curve length must be at least 190 in order for this to run
+#test_samples
+all_obs_cutoff_samples <- lapply(all_obs_cutoff_list, function(x){
+  y <- data.frame(x)
+  get_samples_RL_method(y$new_observed, delay_distr_vec)})
+
+str(all_obs_cutoff_samples)
+```
+```{r}
+p <- RL_delay(delay_distr_vec) #delay distribution vector - notation in keeping with previous notation. this changes the delays to be indexed from 0.
+    
+#note: obs_1 must be at least length(p) in this formulation.
+obs_1 <- length(p)+1+parlist$obs_1_offset
+obs_2 <- obs_1 + parlist$obs_2_offset
+
+u_quants_cutoff <- lapply(all_obs_cutoff_samples, function(x){colQuantiles(x[5000:10000,], probs = c(0, 0.025, .5, .975, 1))})
+str(u_quants_cutoff)
+
+u_quants_cutoff[3]
+
+bayes_deconv_df_cutoff <- lapply(u_quants_cutoff, function(u_quants){data.frame("time" = (obs_1-length(p)-1+2):(obs_2), "inferred.025" = u_quants[,2], "inferred.median" = u_quants[, 3], "inferred.975" = u_quants[, 4], "true" = sim_df$new_infected[(obs_1-length(p)-1+2):(obs_2)])})
+str(bayes_deconv_df_cutoff)
+
+bayes_deconv_df_cutoff_bound <- bind_rows(bayes_deconv_df_cutoff, .id="cutoff_num")
+str(bayes_deconv_df_cutoff_bound)
+```
+
+```{r}
+bayes_deconv_df_cutoff_bound %>%
+  filter(as.integer(cutoff_num) < 3) %>%
+  group_by(cutoff_num) %>%
+  ggplot() + 
+  geom_line(aes(x = time, y = inferred.median, col = cutoff_num, lty = cutoff_num, legend = cutoff_num), size = .8)  +
+  geom_line(aes(x = time, y = true, col = "True Infections", lty = "True Infections", legend = "True Infections"), size = .8) + 
+#  geom_ribbon(aes(x = time, ymin = inferred.025, ymax = inferred.975, fill = cutoff_num, legend = cutoff_num), alpha = 0.2) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, col = "Intervention Time", lty = "Intervention Time", legend = "Intervention Time"), size = 1.1) +
+#  scale_color_manual(values = c("black", "red", "blue")) + 
+#  scale_linetype_manual(values = c("dotted", "solid", "longdash")) +
+#  labs(linetype = "", colour = "", fill = "") +
+  ylab("count")+
+  xlab("time (days)") + 
+  ggtitle('Bayesian Deconvolution, time cutoffs') -> RL_inferred_plot_with_CI_sequential
+RL_inferred_plot_with_CI_sequential
+
+saveRDS(RL_inferred_plot_with_CI, sprintf("%s/RL_inferred_plot_with_CI_sequential.Rds", intervention_file_name))
+ggsave(sprintf("%s/RL_inferred_plot_with_CI_sequential.png", intervention_file_name))
+```
+
+NOTE: Below code block is not ready for case of sequential time series inference.
+```{r}
+cori_true_list <- lapply(all_true_cutoff_list, function(x){get_cori(df.in = x, icol_name = "true")})
+
+cori_true_list_bound <- bind_rows(cori_true_list, .id="cutoff_num")
+cori_true_list_bound$cutoff_num <- factor(cori_true_list_bound$cutoff_num)
+cori_true_list_bound$cutoff_num <- factor(cori_true_list_bound$cutoff_num, levels=rev(levels(cori_true_list_bound$cutoff_num))) 
+cori_true_list_bound
+
+cori_true_list_bound %>% 
+  #filter(as.integer(cutoff_num) < 10) %>%
+  group_by(cutoff_num) %>%
+  ggplot() + 
+  geom_line(mapping = aes(x = time, y = Cori.mean, color = cutoff_num, linetype = cutoff_num)) +
+  #geom_ribbon(mapping= aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = cutoff_num), alpha=0.4, show.legend = FALSE) +
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("solid", "solid", "solid", "solid", "solid", "solid", "dotted", "dashed")) + 
+  #scale_color_manual(values = c("black", "black", "red", "yellow", "blue", "black")) +
+  #scale_fill_manual(values = c("red", "blue", "black")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  #coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt')
+
+
+```
 
 
 
