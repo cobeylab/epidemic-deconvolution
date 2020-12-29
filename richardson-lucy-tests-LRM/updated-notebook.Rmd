@@ -5,7 +5,7 @@ output: html_notebook
 
 Deconvolution analysis by Lauren McGough, Simulations adapted from Katie Gostic
 
-Last updated: 12-23-2020
+Last updated: 12-29-2020
 
 
 ## Introduction
@@ -45,7 +45,7 @@ detach(package:MASS) #This will throw an error if MASS isn't already in the work
 Specify name of folder for results.
 ```{r}
 #intervention_length_name <- sprintf("_shape_%s_scale_%s_2", toString(delay_distr_shape_mult_param), toString(delay_distr_scale_mult_param))
-intervention_length_name <- "_testing_clean_code_uncertainty_highly_misspecified"
+intervention_length_name <- "_testing_clean_code_std_highly_misspecified"
 intervention_file_name <- sprintf("intervention%s", intervention_length_name)
 if (!dir.exists(intervention_file_name)) {
   dir.create(intervention_file_name)
@@ -88,8 +88,8 @@ if (file.exists(sprintf("%s/params.Rds", intervention_file_name))) {
       time_to_obs_std = 0, #the percent uncertainty in the time to observation of the delay distribution - specify a single value
       frac_sampled_std = 0, #the percent uncertainty in the fraction sampled - specify a single value
 ### Misspecification in observation distributions. A value of 1 means no misspecification. ###
-      delay_distr_mean_mult = 1.8, #multiplier for how much to misspecify delay distribution mean - specify a single value
-      delay_distr_std_mult = 1.8, #multiplier for how much to misspecy delay distribution std - specify a single value
+      delay_distr_mean_mult = 1, #multiplier for how much to misspecify delay distribution mean - specify a single value
+      delay_distr_std_mult = 2.0, #multiplier for how much to misspecy delay distribution std - specify a single value
       frac_sampled_mean_mult = 1.2, #multiplier for how much to misspecify fraction sampled - specify a single value
       time_to_obs_mult = 1, #multiplier for how much to misspecify time to observation - specify a single value
 ### Parameters for Bayesian RL inference
@@ -677,12 +677,12 @@ ggsave(sprintf("%s/shift_RL_fractional_difference_with_CI.png", intervention_fil
 
 ```{r}
 
-plot_grid(shift_RL_true_with_CI, shift_RL_fractional_difference_with_CI, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
-
-all_plot
-
-saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
-ggsave(sprintf("%s/all_plot.png", intervention_file_name))
+# plot_grid(shift_RL_true_with_CI, shift_RL_fractional_difference_with_CI, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+# 
+# all_plot
+# 
+# saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
+# ggsave(sprintf("%s/all_plot.png", intervention_file_name))
 
 ```
 
@@ -741,10 +741,10 @@ get_cori <- function(df.in,
 
 ```{r}
 all_u_df <- data.frame("time" = all_inferred_df$time, "true" = all_inferred_df$true, "count_val" = t(all_u[seq(8000, 10000, 50),]))
-dim(all_u_df)
+#dim(all_u_df)
 
 all_u_df_counts <- dplyr::select(all_u_df, starts_with("count"))
-apply(all_u_df_counts, 2, function(x){print(x)})
+#apply(all_u_df_counts, 2, function(x){print(x)})
 all_u_df_cori <-  lapply(names(all_u_df_counts), function(x){get_cori(df.in = all_u_df, icol_name = x)})
 
 cori_shifted <- get_cori(df.in = all_inferred_df, icol_name = "shift.median") #actually want to apply to a bunch of samples from the shifted time series distribution, similar to the all_u example which is sampling from the bayesian time series distribution
@@ -754,6 +754,9 @@ cori_true <- get_cori(df.in = all_inferred_df, icol_name = "true")
 all_u_df_cori_bound <- bind_rows(all_u_df_cori, .id="sample_num")
 all_u_df_cori_bound$sample_num <- as.factor(as.integer(all_u_df_cori_bound$sample_num))
 all_u_df_cori_bound$time <- as.numeric(all_u_df_cori_bound$time)
+all_u_df_cori_bound %>%
+  group_by(time) %>% 
+  summarise(cori.val = mean(Cori.mean), cori.025.val = min(Cori.025), cori.975.val = max(Cori.975)) -> all_u_df_cori_summary
 ```
 
 ```{r}
@@ -774,10 +777,34 @@ all_u_df_cori_bound %>%
   ylab("Rt") +
   ggtitle('Calculations of Rt') ->all_u_df_cori_plot
 
-all_u_df_cori_plot
+#all_u_df_cori_plot
 
 ggsave(sprintf("%s/all_u_df_cori_plot.png", intervention_file_name))
 ```
+```{r}
+all_u_df_cori_summary %>%
+  filter(!is.na(cori.val) & !is.na(cori.025.val) & !is.na(cori.975.val)) %>%
+  ggplot() + 
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_line(aes(x = time, y = cori.val, color = "Sample Rt mean", linetype = "Sample Rt mean")) +
+  geom_ribbon(aes(x = time, ymin=cori.025.val, ymax = cori.975.val, fill = "Sample Rt mean"), alpha=0.4, show.legend = FALSE) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("dotted", "dashed", "solid")) + 
+  scale_color_manual(values = c("black", "black", "red")) +
+  scale_fill_manual(values = c("red")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
+  xlab("time (days)") + 
+  ylab("Rt") +
+  ggtitle('Calculations of Rt') ->all_u_df_cori_summary_plot
+
+#all_u_df_cori_summary_plot
+
+ggsave(sprintf("%s/all_u_df_cori_summary_plot.png", intervention_file_name))
+```
+
+
 ```{r}
 cori_shifted %>%
   filter(!is.na(Cori.mean) & !is.na(Cori.mean)) %>%
@@ -796,7 +823,7 @@ cori_shifted %>%
   ylab("Rt") +
   ggtitle('Calculations of Rt') ->cori_shifted_plot
 
-cori_shifted_plot
+#cori_shifted_plot
 
 ggsave(sprintf("%s/cori_shifted_plot.png", intervention_file_name))
 ```
@@ -818,7 +845,7 @@ cori_true %>%
   ylab("Rt") +
   ggtitle('Calculations of Rt') ->cori_true_plot
 
-cori_true_plot
+#cori_true_plot
 
 ggsave(sprintf("%s/cori_true_plot.png", intervention_file_name))
 ```
@@ -831,9 +858,9 @@ cori_true %>%
   filter(!is.na(Cori.mean) & !is.na(Cori.mean)) -> cori_true_filtered
 
 ggplot() +
-  geom_line(all_u_df_cori_bound_filtered, mapping = aes(x = time, y = Cori.mean, color = "Sample Rt", linetype = "Sample Rt")) +
-  geom_ribbon(all_u_df_cori_bound_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Sample Rt"), alpha=0.4, show.legend = FALSE) +
-  geom_line(cori_shifted_filtered, mapping = aes(x = time, y = Cori.mean, color = "Shifted cases Rt", linetype = "Sample Rt")) +
+  geom_line(all_u_df_cori_summary, mapping = aes(x = time, y = cori.val, color = "Sample Rt mean", linetype = "Sample Rt mean")) +
+  geom_ribbon(all_u_df_cori_summary, mapping= aes(x = time, ymin=cori.025.val, ymax = cori.975.val, fill = "Sample Rt mean"), alpha=0.4, show.legend = FALSE) +
+  geom_line(cori_shifted_filtered, mapping = aes(x = time, y = Cori.mean, color = "Shifted cases Rt", linetype = "Shifted cases Rt")) +
   geom_ribbon(cori_shifted_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "Shifted cases Rt"), alpha=0.4, show.legend = FALSE) +
   geom_line(cori_true_filtered, mapping = aes(x = time, y = Cori.mean, color = "True infections Rt", linetype = "True infections Rt")) +
   geom_ribbon(cori_true_filtered, mapping = aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = "True infections Rt"), alpha=0.4, show.legend = FALSE) +
@@ -853,40 +880,91 @@ all_cori_plot
 ```
 
 ```{r}
-all_cori_df <- bind_rows(all_u_df_cori, cori_shifted, cori_true, .id="sample_num")
-all_cori_df$sample_num <- as.factor(all_cori_df$sample_num)
-all_cori_df$time <- as.numeric(all_cori_df$time)
-all_cori_df
+#all_cori_df <- bind_rows(all_u_df_cori, cori_shifted, cori_true, .id="sample_num")
+#all_cori_df$sample_num <- as.factor(all_cori_df$sample_num)
+#all_cori_df$time <- as.numeric(all_cori_df$time)
+#all_cori_df
 ```
 
 ```{r}
-all_cori_df %>%
-  filter(!is.na(Cori.mean) & !is.na(Cori.mean) & Cori.mean < 5 & Cori.975 < 8) %>%
+plot_grid(shift_RL_true_with_CI, shift_RL_fractional_difference_with_CI, all_cori_plot, labels = "AUTO", ncol = 1, align = 'v') -> all_plot
+
+all_plot
+
+saveRDS(all_plot, sprintf("%s/all_plot.Rds", intervention_file_name))
+ggsave(sprintf("%s/all_plot.png", intervention_file_name))
+```
+
+## Added 12/28/20: Sequentially cutting off time series
+
+The aim of this section is to study whether or not the calculations of $R_t$ depend on when the time series is cut off. 
+That is to say, suppose we compute $R_t$ using infection data up to a cutoff time  $t_c^{(1)}$.
+Then, after more time passes, we may have access to a longer time series up to a later cutoff, $t_c^{(2)} > t_c^{(1)}$. 
+We wish to know if the series of $R_t$ we obtain using the expanded time series cut off at $t_c^{(2)}$ is consistent with the series of $R_t$ we obtain using the time series cut off at $t_c^{(1)}$ for times less than the initial cutoff, $t_c^{(1)}$. 
+This is relevant for an epidemic unfolding in real time, where researchers obtain more and more case data as time passes.
+
+What we learn from the below calculation is that cutting off the time series \emph{after} doing the inference backcalculation using the entire observed case data does not affect the calculation of $R_t$ at subsequent times; that is, the Cori method is robust to cutting off the time series.
+```{r}
+t_seq <- seq(length(delay_distr_vec)+1, parlist$intervention_time_2, 14) #new data every other week, starting from just after the first delay distribution interval has passed
+
+all_inferred_df$time <- as.numeric(all_inferred_df$time)
+
+all_true_df <- dplyr::select(all_inferred_df, c("true","time"))
+all_true_df
+
+cut_off_time <- function(df, t_fin){
+  df %>%
+    filter(time < t_fin) -> df_cutoff
+  #names(df_cutoff)[names(df_cutoff) == "true"] <- sprintf("true.%s", t_fin)
+  df_cutoff
+}
+
+t_fin_test <- 5
+sprintf("true.%s", t_fin_test)
+
+all_true_cutoff_list <- lapply(t_seq, function(x){cut_off_time(all_true_df, x)})
+#all_true_cutoff_list  
+
+cori_true_list <- lapply(all_true_cutoff_list, function(x){get_cori(df.in = x, icol_name = "true")})
+
+cori_true_list_bound <- bind_rows(cori_true_list, .id="cutoff_num")
+cori_true_list_bound$cutoff_num <- factor(cori_true_list_bound$cutoff_num)
+cori_true_list_bound$cutoff_num <- factor(cori_true_list_bound$cutoff_num, levels=rev(levels(cori_true_list_bound$cutoff_num))) 
+cori_true_list_bound
+
+```
+
+```{r}
+cori_true_list_bound %>% 
+  #filter(as.integer(cutoff_num) < 10) %>%
+  group_by(cutoff_num) %>%
   ggplot() + 
-  geom_hline(aes(yintercept = 1, linetype = "one", color = "one")) +
-  geom_line(aes(x = time, y = Cori.mean, color = sample_num, linetype = sample_num)) +
-  geom_ribbon(aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = sample_num), alpha=0.3, show.legend = FALSE) +
-  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'intervention', linetype = 'intervention')) + 
-  #scale_linetype_manual(values=c("solid", "dotted", "dashed", "solid", "solid")) + 
-  #scale_color_manual(values = c("red", "black", "black", "blue", "black")) +
-  #scale_fill_manual(values = c("red", "blue")) +
-  scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
-  labs(color = "Legend", linetype = "Legend", fill = "Legend") +
+  geom_line(mapping = aes(x = time, y = Cori.mean, color = cutoff_num, linetype = cutoff_num)) +
+  #geom_ribbon(mapping= aes(x = time, ymin=Cori.025, ymax = Cori.975, fill = cutoff_num), alpha=0.4, show.legend = FALSE) +
+  geom_hline(aes(yintercept = 1, linetype = "Rt=1", color = "Rt=1")) +
+  geom_vline(aes(xintercept = parlist$intervention_time_1, color = 'Intervention time', linetype = 'Intervention time')) + 
+  scale_linetype_manual(values=c("solid", "solid", "solid", "solid", "solid", "solid", "dotted", "dashed")) + 
+  #scale_color_manual(values = c("black", "black", "red", "yellow", "blue", "black")) +
+  #scale_fill_manual(values = c("red", "blue", "black")) +
+  #scale_color_discrete(name = "Legend", labels = c("Difference = 0", "Time of intervention", "Infections, inferred minus true")) +
+  labs(color = "Legend", linetype = "Legend", fill = "Legend") +  
+  #coord_cartesian(xlim=c(0, obs_2), ylim=c(-.01, 5)) +
   xlab("time (days)") + 
   ylab("Rt") +
-  ggtitle('Calculations of Rt') -> new_all_plot
+  ggtitle('Calculations of Rt')
 
-new_all_plot
 
-ggsave(sprintf("%s/rt_plot.png", intervention_file_name))
 ```
+
+However, it may be that cutting off the \emph{case counts} before doing the backcalculation will change the \emph{inferred curve} of infections (using RL, for example). For example, this may be the case if the delay distribution is misspecified.
+In this case, $R_t$ would certainly depend on when we cut off the time series, as the curve of infections we feed into the Cori method would depend on where we cut off the time series.
+We test this idea below.
 
 
 
 ## Additional work in various stages
 * Cutting off time series at different points and comparing inferred infection curves as observation interval becomes longer, for perfectly specified and misspecified delay distribution
 * Pipeline for taking into account uncertainty in delay distribution by defining a prior on the mean and variance and bootstrapping
-* Computations of $R_t$, not just inferred curve of infections.
 * Epinow2 comparison (see below)
 
 ## Future suggested improvements 
