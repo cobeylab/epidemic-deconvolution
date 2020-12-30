@@ -1050,7 +1050,6 @@ We find that in fact even when the delay distribution is misspecified, the Bayes
 Since we already found that the same is true for the Cori method, we don't have to retest the Cori method using the Bayesian time series.
 *Note: we have not tested misspecifying the serial interval distribution in this case; thus we can't definitively say that misspecifying the serial interval in particular (not just the overall delay distribution, which includes delays from observation which don't affect the Cori method) does not introduce a sensitivity to cutting off the time series at different points.*
 
-
 ## Additional work in various stages
 * Pipeline for taking into account uncertainty in delay distribution by defining a prior on the mean and variance and bootstrapping
 * Epinow2 comparison (see below)
